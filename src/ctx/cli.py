@@ -16,7 +16,10 @@ from ctx.shellinit import SUPPORTED_SHELLS, shellinit
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    shell, argv = _extract_shell_flag(argv)
+    try:
+        shell, argv = _extract_shell_flag(argv)
+    except ValueError as e:
+        return _die(str(e))
 
     # Reserved builtin: shellinit. Dispatched before touching YAML.
     if argv and argv[0] == "shellinit":
@@ -64,10 +67,9 @@ def _extract_shell_flag(argv: list[str]) -> tuple[str, list[str]]:
         else:
             rest.append(arg)
     if shell not in SUPPORTED_SHELLS:
-        # Validated lazily; a bad --shell only becomes an error if we
-        # would actually use it (i.e. not during shellinit path).
-        # But we still want to fail loudly when running commands.
-        pass
+        raise ValueError(
+            f"unsupported --shell={shell!r}; expected one of {SUPPORTED_SHELLS}"
+        )
     return shell, rest
 
 

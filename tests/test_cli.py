@@ -100,6 +100,15 @@ commands:
     assert "set -gx FISH_TEST" in dump.read_text()
 
 
+def test_invalid_shell_flag_rejected(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    rc = main(["--shell=powershell", "shellinit", "bash"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "unsupported --shell" in err
+    assert "powershell" in err
+
+
 def test_shellinit_reserved_shadows_user_command(tmp_path, monkeypatch, capsys):
     _write_yaml(tmp_path, """
 commands:
