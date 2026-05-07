@@ -62,6 +62,47 @@ def format_bash(
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def format_fish(added_or_changed: dict[str, str], removed: set[str]) -> str:
-    """Stub — implemented in Task 6."""
-    raise NotImplementedError("format_fish is implemented in Task 6")
+def _fish_quote(value: str) -> str:
+    """
+    Quote `value` for fish.
+
+    Simple case: if the value contains no control bytes, wrap in single
+    quotes and escape `\\` and `'`.
+
+    Control-byte case: split into safe single-quoted runs interleaved
+    with \\xNN escapes outside quotes. fish concatenates adjacent tokens.
+    """
+    def has_control(s: str) -> bool:
+        return any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+    if not has_control(value):
+        escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+
+    parts: list[str] = []
+    buf: list[str] = []
+    for ch in value:
+        if ord(ch) < 0x20 or ord(ch) == 0x7f:
+            if buf:
+                seg = "".join(buf).replace("\\", "\\\\").replace("'", "\\'")
+                parts.append(f"'{seg}'")
+                buf = []
+            parts.append(f"\\x{ord(ch):02x}")
+        else:
+            buf.append(ch)
+    if buf:
+        seg = "".join(buf).replace("\\", "\\\\").replace("'", "\\'")
+        parts.append(f"'{seg}'")
+    return "".join(parts) if parts else "''"
+
+
+def format_fish(
+    added_or_changed: dict[str, str],
+    removed: set[str],
+) -> str:
+    lines: list[str] = []
+    for k in sorted(added_or_changed):
+        lines.append(f"set -gx {k} {_fish_quote(added_or_changed[k])}")
+    for k in sorted(removed):
+        lines.append(f"set -e {k}")
+    return "\n".join(lines) + ("\n" if lines else "")

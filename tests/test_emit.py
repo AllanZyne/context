@@ -51,3 +51,28 @@ def test_format_bash_deterministic_ordering():
         "unset X",
         "unset Y",
     ]
+
+
+def test_format_fish_basic():
+    out = format_fish({"FOO": "bar"}, {"OLD"})
+    assert "set -gx FOO 'bar'" in out
+    assert "set -e OLD" in out
+    assert out.endswith("\n")
+
+
+def test_format_fish_escapes_single_quote_and_backslash():
+    out = format_fish({"X": r"it's a \path"}, set())
+    # fish single-quoted strings only escape \' and \\
+    assert out == "set -gx X 'it\\'s a \\\\path'\n"
+
+
+def test_format_fish_control_bytes_via_hex():
+    out = format_fish({"X": "a\x01b"}, set())
+    # Values with control bytes cannot live inside '...', we fall back
+    # to concatenation of safe quoted segments and \xNN escapes.
+    # Expect that the output can be re-sourced by fish and produces "a\x01b".
+    assert "\\x01" in out or "\\X01" in out
+
+
+def test_format_fish_empty_diff_is_empty_string():
+    assert format_fish({}, set()) == ""
