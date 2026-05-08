@@ -48,8 +48,13 @@ def run_leaf(
         if rc == 0 and env_dump_path is not None:
             final_env = _parse_env_nul(raw_env_path.read_bytes())
             added, removed = diff_env(initial_env, final_env)
-            source = _format_for_shell(shell, added, removed)
-            env_dump_path.write_text(source)
+            # Only create env_dump_path when there is something to
+            # write. The wrapper used `mktemp -u` so the path does not
+            # exist yet; an empty diff means the wrapper finds nothing
+            # to source AND nothing to rm.
+            if added or removed:
+                source = _format_for_shell(shell, added, removed)
+                env_dump_path.write_text(source)
 
         return rc
     finally:

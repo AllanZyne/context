@@ -206,3 +206,56 @@ def test_fish_shellinit_pipe_applies_env_writeback(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     assert "AFTER_FOO=bar-from-ctx" in result.stdout
+
+
+# --- Regression tests for eager tmpfile / rm alias ---
+
+
+@pytest.mark.skipif(not _has("bash"), reason="bash not available")
+def test_bash_wrapper_no_tmpfile_when_yaml_missing(tmp_path: Path):
+    """
+    When ctx-bin fails early (e.g. no context.yaml), the wrapper must
+    not leave stray $TMPDIR/ctx-env.* files behind.
+    """
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    workdir = tmp_path / "work"
+    workdir.mkdir()  # no context.yaml inside
+
+    script = f"""
+        source {BASH_WRAPPER}
+        cd {workdir}
+        ctx anything || true
+    """
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+        env={**os.environ, "TMPDIR": str(tmpdir)},
+    )
+    assert "no context.yaml found" in result.stderr, result.stderr
+    leftover = list(tmpdir.glob("ctx-env.*"))
+    assert leftover == [], f"unexpected tmpfile(s) left behind: {leftover}"
+
+
+@pytest.mark.skipif(not _has("bash"), reason="bash not available")
+def test_bash_wrapper_ignores_rm_alias(tmp_path: Path):
+    """
+    If the user has `alias rm='rm -v'`, the wrapper must not leak a
+    `removed '...'` line into ctx output.
+    """
+    workdir = tmp_path / "work"
+    workdir.mkdir()  # no context.yaml — triggers early exit
+    script = f"""
+        alias rm='rm -v'
+        shopt -s expand_aliases
+        source {BASH_WRAPPER}
+        cd {workdir}
+        ctx anything 2>&1 || true
+    """
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True, text=True, cwd=REPO_ROOT, env={**os.environ},
+    )
+    assert "removed" not in result.stdout, (
+        f"rm -v leaked through wrapper:\n{result.stdout}"
+    )

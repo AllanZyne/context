@@ -10,13 +10,15 @@
 #        source /path/to/ctx/shells/ctx.fish         # add to config.fish
 
 function ctx
-    set -l _ctx_dump (mktemp -t ctx-env.XXXXXX)
+    set -l _ctx_dump (mktemp -u -t ctx-env.XXXXXX)
     or return 1
     CTX_ENV_DUMP=$_ctx_dump command ctx-bin --shell=fish $argv
     set -l _ctx_rc $status
     if test $_ctx_rc -eq 0 -a -s $_ctx_dump
         source $_ctx_dump
     end
-    rm -f $_ctx_dump
+    if test -e $_ctx_dump
+        command rm -f $_ctx_dump
+    end
     return $_ctx_rc
 end

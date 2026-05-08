@@ -66,21 +66,29 @@ def test_run_leaf_leaf_env_visible_to_command(project: Path, capfd):
 
 
 def test_run_leaf_writes_env_dump_on_success(project: Path, tmp_path: Path):
-    dump = tmp_path / "dump.sh"
+    dump = tmp_path / "dump.sh"  # wrapper used mktemp -u: path does not exist
     leaf = LeafNode(path=("x",), run=["export NEW_VAR=42"])
     rc = run_leaf(leaf, project, shell="bash", env_dump_path=dump)
     assert rc == 0
-    content = dump.read_text()
-    assert "export NEW_VAR=$'42'" in content
+    assert dump.exists()
+    assert "export NEW_VAR=$'42'" in dump.read_text()
 
 
-def test_run_leaf_dump_file_empty_on_failure(project: Path, tmp_path: Path):
-    dump = tmp_path / "dump.sh"
-    dump.write_text("")  # wrapper would create it empty
+def test_run_leaf_no_dump_when_env_unchanged(project: Path, tmp_path: Path):
+    """Success with zero env diff must leave the dump path non-existent."""
+    dump = tmp_path / "dump.sh"  # does not exist
+    leaf = LeafNode(path=("x",), run=["echo no-env-change"])
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=dump)
+    assert rc == 0
+    assert not dump.exists()
+
+
+def test_run_leaf_no_dump_on_failure(project: Path, tmp_path: Path):
+    dump = tmp_path / "dump.sh"  # does not exist (mktemp -u)
     leaf = LeafNode(path=("x",), run=["export NEW_VAR=42", "false"])
     rc = run_leaf(leaf, project, shell="bash", env_dump_path=dump)
     assert rc != 0
-    assert dump.read_text() == ""
+    assert not dump.exists()
 
 
 def test_run_leaf_fish_dump_uses_fish_syntax(project: Path, tmp_path: Path):
@@ -88,4 +96,5 @@ def test_run_leaf_fish_dump_uses_fish_syntax(project: Path, tmp_path: Path):
     leaf = LeafNode(path=("x",), run=["export FISH_VAR=42"])
     rc = run_leaf(leaf, project, shell="fish", env_dump_path=dump)
     assert rc == 0
+    assert dump.exists()
     assert "set -gx FISH_VAR '42'" in dump.read_text()
