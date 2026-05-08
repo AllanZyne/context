@@ -19,15 +19,11 @@ uv tool install git+https://github.com/AllanZyne/context
 git clone https://github.com/AllanZyne/context.git
 cd context
 
-# 2. (Optional) Run the test suite to confirm your environment is sane.
-uv sync --group dev
-uv run pytest
-
-# 3. Install the ctx-bin executable into uv's tool environment.
+# 2. Install the ctx-bin executable into uv's tool environment.
 #    --reinstall is safe to re-run on every `git pull`.
 uv tool install --reinstall .
 
-# 4. Verify the binary is on your PATH.
+# 3. Verify the binary is on your PATH.
 which ctx-bin            # should print something under ~/.local/share/uv/tools
 ctx-bin shellinit bash   # should print a bash `ctx() { ... }` function
 ```
