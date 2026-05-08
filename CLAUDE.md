@@ -98,7 +98,17 @@ tests/test_*.py                pytest, one per module + test_integration.py
   `str()` before use; lists/dicts are rejected at load time.
 - Leaf/group disambiguation: presence of `run` key → leaf. A node
   with `run` plus any non-reserved sibling (anything outside
-  `{run, desc, cwd, env}`) is rejected.
+  `{run, desc, cwd, env, export}`) is rejected.
+- **`env` vs `export`**: both are `mapping<str, str>` layered onto
+  the subprocess env. Difference is in the diff baseline inside
+  runner.py: `env` goes into `baseline_env` (and so doesn't appear
+  in writeback unless mutated), `export` does NOT (and so always
+  does). The same key in both is a validation error.
+- **`{args}` placeholder**: a leaf with `{args}` or `{args|default}`
+  anywhere in its `run:` list opts into accepting extra CLI tokens.
+  resolver detects via `_ARGS_RE`; runner substitutes via
+  `_substitute_args` (shlex.join for safety). Without the
+  placeholder, extra tokens still error as before.
 
 ## Git / workflow gotchas
 

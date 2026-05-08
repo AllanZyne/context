@@ -28,7 +28,7 @@ def find_yaml(start: Path) -> Path:
 import yaml
 
 
-_LEAF_KEYS = {"run", "desc", "cwd", "env"}
+_LEAF_KEYS = {"run", "desc", "cwd", "env", "export"}
 
 
 def load_and_validate(yaml_path: Path) -> dict:
@@ -95,17 +95,29 @@ def _validate_leaf(node: dict, path: tuple[str, ...]) -> None:
     if "cwd" in node and not isinstance(node["cwd"], str):
         raise ConfigError(f"{dotted}.cwd: must be a string")
 
-    if "env" in node:
-        env = node["env"]
-        if not isinstance(env, dict):
-            raise ConfigError(f"{dotted}.env: must be a mapping")
-        coerced = {}
-        for k, v in env.items():
-            if not isinstance(k, str):
-                raise ConfigError(f"{dotted}.env: keys must be strings")
-            if isinstance(v, (list, dict)):
-                raise ConfigError(
-                    f"{dotted}.env.{k}: value must be a scalar (got {type(v).__name__})"
-                )
-            coerced[k] = str(v)
-        node["env"] = coerced
+    for field in ("env", "export"):
+        if field in node:
+            node[field] = _coerce_env_mapping(node[field], dotted, field)
+
+    if "env" in node and "export" in node:
+        overlap = set(node["env"]) & set(node["export"])
+        if overlap:
+            raise ConfigError(
+                f"{dotted}: key(s) {sorted(overlap)!r} appear in both 'env' and 'export'; "
+                "put each variable in only one of the two"
+            )
+
+
+def _coerce_env_mapping(value, dotted: str, field: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{dotted}.{field}: must be a mapping")
+    coerced: dict[str, str] = {}
+    for k, v in value.items():
+        if not isinstance(k, str):
+            raise ConfigError(f"{dotted}.{field}: keys must be strings")
+        if isinstance(v, (list, dict)):
+            raise ConfigError(
+                f"{dotted}.{field}.{k}: value must be a scalar (got {type(v).__name__})"
+            )
+        coerced[k] = str(v)
+    return coerced

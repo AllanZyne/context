@@ -113,3 +113,27 @@ shellinit:
     out = capsys.readouterr().out
     assert "ctx()" in out
     assert "user-version" not in out
+
+
+def test_args_forwarded_to_leaf(tmp_path, monkeypatch, capfd):
+    _write_yaml(tmp_path, """
+greet:
+  run:
+    - echo hi {args}
+""")
+    monkeypatch.chdir(tmp_path)
+    rc = main(["greet", "there", "friend"])
+    assert rc == 0
+    assert "hi there friend" in capfd.readouterr().out
+
+
+def test_args_default_kicks_in_with_no_extra_tokens(tmp_path, monkeypatch, capfd):
+    _write_yaml(tmp_path, """
+greet:
+  run:
+    - echo {args|world}
+""")
+    monkeypatch.chdir(tmp_path)
+    rc = main(["greet"])
+    assert rc == 0
+    assert "world" in capfd.readouterr().out

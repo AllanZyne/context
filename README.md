@@ -71,15 +71,23 @@ build:
   prod:
     cwd: ./app
     env:
-      NODE_ENV: production
+      NODE_ENV: production          # visible during the build only
     run:
       - docker build -t app:prod .
   dev:
     run:
       - docker build -t app:dev .
+test:
+  run:
+    - pytest {args}                 # `ctx test -k login` → pytest -k login
+use-python-3.12:
+  export:
+    PYTHON_VERSION: "3.12"          # lives on in your shell after the command
+  run:
+    - pyenv local 3.12.0
 activate:
   run:
-    - source .venv/bin/activate   # VIRTUAL_ENV propagates back
+    - source .venv/bin/activate     # VIRTUAL_ENV propagates back
 ```
 
 Then, from any directory under the project:
@@ -87,7 +95,9 @@ Then, from any directory under the project:
 ```
 $ ctx init                # runs init.run
 $ ctx build prod          # runs build.prod.run
-$ ctx activate            # env changes flow back to your shell
+$ ctx test -k login       # runs pytest -k login (via {args})
+$ ctx use-python-3.12     # sets PYTHON_VERSION in your shell (via export:)
+$ ctx activate            # env changes from `source` flow back
 $ echo $VIRTUAL_ENV       # now set
 ```
 
@@ -100,12 +110,48 @@ or a **leaf** (a concrete command, identified by the presence of a
 
 ### Leaf fields
 
-| Field  | Type             | Required | Description                                                                                                                                   |
-|--------|------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| `run`  | list of strings  | yes      | Shell commands executed in order under a single `bash -c` invocation with `set -e`. Pipes, redirections, `source`, and `cd` all work as you'd expect; state (cwd, vars) carries between entries. Empty strings are rejected. |
-| `desc` | string           | no       | Human description, reserved for future `--help`-style listing. Accepted but currently unused at runtime.                                      |
-| `cwd`  | string           | no       | Working directory for the command, **relative to the directory containing `context.yaml`**. Must exist at execution time. Defaults to the yaml's own directory. |
-| `env`  | mapping          | no       | Extra environment variables layered on top of the inherited shell env. Scalars (`string`/`int`/`bool`) are coerced to strings; lists/dicts are rejected. |
+| Field    | Type             | Required | Description                                                                                                                                   |
+|----------|------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `run`    | list of strings  | yes      | Shell commands executed in order under a single `bash -c` invocation with `set -e`. Pipes, redirections, `source`, and `cd` all work as you'd expect; state (cwd, vars) carries between entries. Empty strings are rejected. |
+| `desc`   | string           | no       | Human description, reserved for future `--help`-style listing. Accepted but currently unused at runtime.                                      |
+| `cwd`    | string           | no       | Working directory for the command, **relative to the directory containing `context.yaml`**. Must exist at execution time. Defaults to the yaml's own directory. |
+| `env`    | mapping          | no       | Extra environment variables for the command. **Local to this run** — values are visible to the command but **do not** propagate back to the parent shell unless the command itself mutates them. Scalars (`string`/`int`/`bool`) are coerced to strings; lists/dicts are rejected. |
+| `export` | mapping          | no       | Same shape as `env`, but values **always** flow back to the parent shell after a successful run. Use this when you want the command's purpose to be "set some variables." A key may appear in `env` **or** `export`, not both. |
+
+### Argument forwarding via `{args}`
+
+Any `{args}` placeholder in a `run:` string is replaced at execution
+time with whatever tokens the user passed after the subcommand path,
+shell-quoted for safety:
+
+```yaml
+test:
+  run:
+    - pytest {args}
+
+fmt:
+  run:
+    - ruff format {args|.}   # default: format the current dir
+```
+
+```
+$ ctx test                    # → pytest
+$ ctx test -k login -x        # → pytest -k login -x
+$ ctx test "name with spaces" # → pytest 'name with spaces'
+$ ctx fmt                     # → ruff format .   (default kicks in)
+$ ctx fmt src/foo.py          # → ruff format src/foo.py
+```
+
+Syntax:
+
+- `{args}` — substituted with the captured tokens (empty string if none).
+- `{args|anything up to the closing brace}` — if the user passes no
+  extra tokens, the default after `|` is inserted **verbatim** (not
+  re-quoted); the YAML author controls its shape directly.
+
+If no `run:` string contains `{args}` (or `{args|...}`), passing extra
+tokens still errors with *"command X takes no further arguments"* —
+behavior is unchanged for subcommands that don't opt in.
 
 ### Group rules
 

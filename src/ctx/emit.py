@@ -1,5 +1,13 @@
 FILTERED_KEYS: frozenset[str] = frozenset({
+    # Directory / process state that each shell manages for itself.
     "PWD", "OLDPWD", "SHLVL", "_", "PPID",
+    # Interactive-shell variables that bash -c does not inherit;
+    # without this, a no-op ctx call would emit spurious `unset`
+    # lines and corrupt the user's prompt.
+    "PS1", "PS2", "PS3", "PS4",
+    "LINES", "COLUMNS",
+    "BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE",
+    "FUNCNAME", "GROUPS", "DIRSTACK",
 })
 
 

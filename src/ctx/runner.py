@@ -1,11 +1,12 @@
 import os
+import re
 import shlex
 import subprocess
 import tempfile
 from pathlib import Path
 
 from ctx.emit import diff_env, format_bash, format_fish
-from ctx.resolver import LeafNode
+from ctx.resolver import ARGS_PLACEHOLDER, LeafNode
 
 
 class RunnerError(Exception):
@@ -27,8 +28,17 @@ def run_leaf(
     that shell wrappers skip sourcing).
     """
     cwd = _resolve_cwd(project_root, leaf.cwd)
-    initial_env = os.environ.copy()
-    initial_env.update(leaf.env)
+
+    # env values are baseline (diff ignores them if the command doesn't
+    # touch them). export values are applied to the subprocess env BUT
+    # kept out of the baseline, so they always show up in the diff and
+    # thus flow back to the parent shell.
+    baseline_env = os.environ.copy()
+    baseline_env.update(leaf.env)
+    subprocess_env = baseline_env.copy()
+    subprocess_env.update(leaf.export)
+
+    commands = _substitute_args(leaf.run, leaf.args)
 
     # Tempfile for bash to dump env -0 into.
     with tempfile.NamedTemporaryFile(
@@ -37,17 +47,17 @@ def run_leaf(
         raw_env_path = Path(tmp.name)
 
     try:
-        script = _build_bash_script(leaf.run, cwd, raw_env_path)
+        script = _build_bash_script(commands, cwd, raw_env_path)
         completed = subprocess.run(
             ["bash", "-c", script],
-            env=initial_env,
+            env=subprocess_env,
             cwd=cwd,
         )
         rc = completed.returncode
 
         if rc == 0 and env_dump_path is not None:
             final_env = _parse_env_nul(raw_env_path.read_bytes())
-            added, removed = diff_env(initial_env, final_env)
+            added, removed = diff_env(baseline_env, final_env)
             # Only create env_dump_path when there is something to
             # write. The wrapper used `mktemp -u` so the path does not
             # exist yet; an empty diff means the wrapper finds nothing
@@ -62,6 +72,30 @@ def run_leaf(
             raw_env_path.unlink()
         except FileNotFoundError:
             pass
+
+
+_ARGS_PATTERN = re.compile(r"\{args(?:\|([^{}]*))?\}")
+
+
+def _substitute_args(commands: list[str], args: list[str]) -> list[str]:
+    """
+    Replace every occurrence of {args} or {args|<default>} in each
+    command. {args} → shlex.join(args) (empty string if no args).
+    {args|foo bar} → "foo bar" when args is empty, else shlex.join(args).
+
+    The default is inserted verbatim (not re-quoted) so the YAML author
+    can control its shape directly. Inside the default, '{' and '}' are
+    not allowed (the regex uses [^{}] to keep nesting out).
+    """
+    joined = shlex.join(args) if args else None
+
+    def replace(match: re.Match[str]) -> str:
+        if joined is not None:
+            return joined
+        default = match.group(1)
+        return default if default is not None else ""
+
+    return [_ARGS_PATTERN.sub(replace, cmd) for cmd in commands]
 
 
 def _resolve_cwd(project_root: Path, cwd: str | None) -> Path:
