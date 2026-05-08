@@ -18,7 +18,23 @@ def test_diff_env_filters_shell_internals():
 
 
 def test_filtered_keys_contents():
+    # Process/dir state each shell manages itself.
     assert {"PWD", "OLDPWD", "SHLVL", "_", "PPID"} <= FILTERED_KEYS
+    # Interactive-shell variables that bash -c doesn't inherit;
+    # without filtering these, a no-op ctx call would emit
+    # `unset PS1` and wipe the user's prompt.
+    assert {"PS1", "PS2", "LINES", "COLUMNS"} <= FILTERED_KEYS
+
+
+def test_ps1_not_emitted_as_unset_when_missing_in_child():
+    """Regression: PS1 lives in the parent shell but bash -c strips
+    it. We must not emit `unset PS1`."""
+    before = {"PS1": "> ", "REAL_VAR": "kept"}
+    after = {"REAL_VAR": "kept"}
+    added, removed = diff_env(before, after)
+    assert added == {}
+    assert "PS1" not in removed
+    assert removed == set()
 
 
 def test_format_bash_basic():

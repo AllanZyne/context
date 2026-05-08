@@ -98,3 +98,131 @@ def test_run_leaf_fish_dump_uses_fish_syntax(project: Path, tmp_path: Path):
     assert rc == 0
     assert dump.exists()
     assert "set -gx FISH_VAR '42'" in dump.read_text()
+
+
+# --- export: values flow back to parent, env: values don't ---
+
+
+def test_run_leaf_export_is_written_back_unchanged(project: Path, tmp_path: Path):
+    """A variable declared in `export` must appear in the dump even if
+    no command mutates it."""
+    dump = tmp_path / "dump.sh"
+    leaf = LeafNode(
+        path=("x",),
+        run=["echo just-printing"],
+        export={"MY_EXPORT": "exported-value"},
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=dump)
+    assert rc == 0
+    assert dump.exists()
+    assert "export MY_EXPORT=$'exported-value'" in dump.read_text()
+
+
+def test_run_leaf_env_is_not_written_back_when_unchanged(project: Path, tmp_path: Path):
+    """A variable declared only in `env` must NOT appear in the dump
+    if the command doesn't mutate it."""
+    dump = tmp_path / "dump.sh"
+    leaf = LeafNode(
+        path=("x",),
+        run=["echo just-printing"],
+        env={"MY_ENV": "env-value"},
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=dump)
+    assert rc == 0
+    # Empty diff → dump file not created at all.
+    assert not dump.exists()
+
+
+def test_run_leaf_export_and_env_visible_to_commands(project: Path, capfd):
+    leaf = LeafNode(
+        path=("x",),
+        run=['echo "E=$E X=$X"'],
+        env={"E": "env-val"},
+        export={"X": "exp-val"},
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    out = capfd.readouterr().out
+    assert "E=env-val X=exp-val" in out
+
+
+# --- {args} substitution ---
+
+
+def test_run_leaf_args_substituted_into_command(project: Path, capfd):
+    leaf = LeafNode(
+        path=("test",),
+        run=["echo {args}"],
+        args=["hello", "world"],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    out = capfd.readouterr().out
+    assert "hello world" in out
+
+
+def test_run_leaf_args_shell_quoting(project: Path, capfd):
+    """Args with spaces/quotes must survive the substitution."""
+    leaf = LeafNode(
+        path=("test",),
+        run=["printf '%s\\n' {args}"],
+        args=["first", "second with spaces", "third'quote"],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    lines = capfd.readouterr().out.splitlines()
+    # Each arg should end up as one printf argument.
+    assert "first" in lines
+    assert "second with spaces" in lines
+    assert "third'quote" in lines
+
+
+def test_run_leaf_args_placeholder_with_empty_args(project: Path, capfd):
+    leaf = LeafNode(
+        path=("test",),
+        run=["echo before{args}after"],
+        args=[],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    assert "beforeafter" in capfd.readouterr().out
+
+
+def test_run_leaf_default_args_used_when_empty(project: Path, capfd):
+    leaf = LeafNode(
+        path=("test",),
+        run=["echo {args|default-value}"],
+        args=[],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    assert "default-value" in capfd.readouterr().out
+
+
+def test_run_leaf_default_args_overridden_when_provided(project: Path, capfd):
+    leaf = LeafNode(
+        path=("test",),
+        run=["echo {args|fallback}"],
+        args=["actual"],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    out = capfd.readouterr().out
+    assert "actual" in out
+    assert "fallback" not in out
+
+
+def test_run_leaf_args_substituted_in_multiple_commands(project: Path, capfd):
+    leaf = LeafNode(
+        path=("test",),
+        run=[
+            "echo first {args}",
+            "echo second {args}",
+        ],
+        args=["X"],
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    out = capfd.readouterr().out
+    assert "first X" in out
+    assert "second X" in out

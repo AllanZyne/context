@@ -126,3 +126,45 @@ x:
 """)
     data = load_and_validate(tmp_path / "context.yaml")
     assert data["x"]["env"] == {"N": "1", "B": "True"}
+
+
+def test_export_values_coerced_to_strings(tmp_path: Path):
+    _write(tmp_path, """
+x:
+  export:
+    MYVAR: hello
+    N: 42
+  run:
+    - echo
+""")
+    data = load_and_validate(tmp_path / "context.yaml")
+    assert data["x"]["export"] == {"MYVAR": "hello", "N": "42"}
+
+
+def test_env_and_export_conflict_rejected(tmp_path: Path):
+    _write(tmp_path, """
+x:
+  env:
+    FOO: a
+  export:
+    FOO: b
+  run:
+    - echo
+""")
+    with pytest.raises(ConfigError) as exc:
+        load_and_validate(tmp_path / "context.yaml")
+    msg = str(exc.value)
+    assert "'FOO'" in msg and "both" in msg
+
+
+def test_export_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+x:
+  export:
+    FOO: [1, 2]
+  run:
+    - echo
+""")
+    with pytest.raises(ConfigError) as exc:
+        load_and_validate(tmp_path / "context.yaml")
+    assert "scalar" in str(exc.value)

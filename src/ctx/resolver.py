@@ -1,8 +1,13 @@
+import re
 from dataclasses import dataclass, field
 
 
 class ResolveError(Exception):
     """Argv did not resolve to a valid command."""
+
+
+ARGS_PLACEHOLDER = "{args}"
+_ARGS_RE = re.compile(r"\{args(?:\|[^{}]*)?\}")
 
 
 @dataclass(frozen=True)
@@ -11,6 +16,12 @@ class LeafNode:
     run: list[str]
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
+    export: dict[str, str] = field(default_factory=dict)
+    args: list[str] = field(default_factory=list)
+
+    @property
+    def accepts_args(self) -> bool:
+        return any(_ARGS_RE.search(cmd) for cmd in self.run)
 
 
 @dataclass(frozen=True)
@@ -34,8 +45,11 @@ def resolve(data: dict, tokens: list[str]) -> LeafNode | GroupListing:
 
     for i, token in enumerate(tokens):
         if _is_leaf(node):
-            leaf = _as_leaf(node, path)
-            extra = tokens[i:]
+            # Extra tokens after a leaf: either consumed as {args} or an error.
+            extra = list(tokens[i:])
+            leaf = _as_leaf(node, path, args=extra)
+            if leaf.accepts_args:
+                return leaf
             raise ResolveError(
                 f"command {' '.join(path)!r} takes no further arguments "
                 f"(got {extra[0]!r})"
@@ -51,7 +65,7 @@ def resolve(data: dict, tokens: list[str]) -> LeafNode | GroupListing:
         path = path + (token,)
 
     if _is_leaf(node):
-        return _as_leaf(node, path)
+        return _as_leaf(node, path, args=[])
     return GroupListing(path=path, children=sorted(node.keys()))
 
 
@@ -59,10 +73,12 @@ def _is_leaf(node: dict) -> bool:
     return isinstance(node, dict) and "run" in node
 
 
-def _as_leaf(node: dict, path: tuple[str, ...]) -> LeafNode:
+def _as_leaf(node: dict, path: tuple[str, ...], args: list[str]) -> LeafNode:
     return LeafNode(
         path=path,
         run=list(node["run"]),
         cwd=node.get("cwd"),
         env=dict(node.get("env", {})),
+        export=dict(node.get("export", {})),
+        args=list(args),
     )

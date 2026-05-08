@@ -62,3 +62,37 @@ def test_resolve_extra_tokens_on_leaf():
         resolve(CONFIG, ["init", "extra"])
     assert "takes no further arguments" in str(exc.value)
     assert "'extra'" in str(exc.value)
+
+
+CONFIG_WITH_ARGS = {
+    "test": {"run": ["pytest {args}"]},
+    "grep_with_default": {"run": ["rg {args|--color=always}"]},
+    "plain": {"run": ["echo plain"]},
+}
+
+
+def test_resolve_args_captured_on_leaf_with_placeholder():
+    result = resolve(CONFIG_WITH_ARGS, ["test", "-k", "login", "-x"])
+    assert isinstance(result, LeafNode)
+    assert result.path == ("test",)
+    assert result.args == ["-k", "login", "-x"]
+    assert result.accepts_args is True
+
+
+def test_resolve_args_empty_on_leaf_with_placeholder_and_no_extra_tokens():
+    result = resolve(CONFIG_WITH_ARGS, ["test"])
+    assert isinstance(result, LeafNode)
+    assert result.args == []
+    assert result.accepts_args is True
+
+
+def test_resolve_leaf_with_default_args_detected():
+    result = resolve(CONFIG_WITH_ARGS, ["grep_with_default"])
+    assert isinstance(result, LeafNode)
+    assert result.accepts_args is True
+
+
+def test_resolve_extra_tokens_still_error_when_no_placeholder():
+    with pytest.raises(ResolveError) as exc:
+        resolve(CONFIG_WITH_ARGS, ["plain", "extra"])
+    assert "takes no further arguments" in str(exc.value)
