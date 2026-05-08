@@ -3,6 +3,17 @@
 Keep this file short. Record only things that (a) are easy to get wrong
 and (b) aren't obvious from just reading the code or the README.
 
+## Working agreement with the user (do NOT deviate)
+
+1. **Don't create `docs/superpowers/specs/` or `docs/superpowers/plans/`
+   files** unless the user explicitly asks. When a superpowers skill
+   (brainstorming, writing-plans) wants to save a design or plan
+   document, skip the file write and keep it in chat.
+2. **Don't run `git commit`** (or `git add` + commit) unless the user
+   explicitly asks. Leave changes in the working tree after editing so
+   the user can review. Read-only git (`status`, `diff`, `log`) is
+   fine.
+
 ## What this is
 
 A Python CLI (`ctx-bin`, wrapped as a shell function `ctx`) that reads a
