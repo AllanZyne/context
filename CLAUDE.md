@@ -17,10 +17,19 @@ and (b) aren't obvious from just reading the code or the README.
 ## What this is
 
 A Python CLI (`ctx-bin`, wrapped as a shell function `ctx`) that reads a
-hierarchical `context.yaml`, runs commands under `/bin/bash`, and
-propagates env-var changes back to the parent shell (bash/zsh/fish).
-User-facing docs live in `README.md`; the design spec is at
-`docs/superpowers/specs/2026-05-07-ctx-design.md`.
+hierarchical `context.yaml` and runs its leaves in one of two modes:
+
+- **source mode (default)**: ctx-bin writes a generated shell script to
+  `$CTX_SOURCE_SCRIPT`; the wrapper `source`s it in the parent shell.
+  Every shell side effect — env, functions, aliases, `conda activate` —
+  persists. Not all-or-nothing: a mid-run failure leaves earlier
+  mutations in the parent shell.
+- **subprocess mode** (`mode: subprocess`): ctx-bin runs commands under
+  `$SHELL -c`, diffs `env -0` before/after, writes fish/bash writeback
+  to `$CTX_ENV_DUMP`; the wrapper sources that. All-or-nothing on env
+  writeback. Only env vars flow back (no functions / aliases).
+
+User-facing docs live in `README.md`.
 
 ## Commands
 
@@ -42,8 +51,10 @@ src/ctx/
   cli.py         argv dispatch + --shell= flag + shellinit reservation
   config.py      find_yaml() walks up; load_and_validate() schema checks
   resolver.py    pure fn: tokens → LeafNode | GroupListing
-  runner.py      single bash -c subprocess; env -0 diff; writes CTX_ENV_DUMP
-  emit.py        pure fns: diff_env, format_bash, format_fish
+  runner.py      source mode writes $CTX_SOURCE_SCRIPT; subprocess mode
+                 execs under $SHELL -c + diffs env to $CTX_ENV_DUMP
+  emit.py        pure fns: diff_env, format_bash, format_fish (subprocess
+                 mode only)
   shellinit.py   wrapper templates emitted by `ctx-bin shellinit <shell>`
 
 shells/ctx.{bash,zsh,fish}    static copies of shellinit() output
@@ -60,10 +71,11 @@ tests/test_*.py                pytest, one per module + test_integration.py
    the leading comment header only.
 
 2. **The wrapper must not create any file until ctx-bin writes to it.**
-   Uses `mktemp -u` (name only, no file). Combined with: runner.py only
-   writes `CTX_ENV_DUMP` when the env diff is non-empty. Combined with:
-   wrapper cleanup is guarded by `[ -e ]` / `test -e`. Rationale: a
-   stray `removed '...'` trailer was visible to users who had
+   Both `$CTX_ENV_DUMP` (subprocess mode) and `$CTX_SOURCE_SCRIPT`
+   (source mode) use `mktemp -u` (name only, no file). Combined with:
+   runner only writes the relevant file when it has content. Combined
+   with: wrapper cleanup is guarded by `[ -e ]` / `test -e`. Rationale:
+   a stray `removed '...'` trailer was visible to users who had
    `alias rm='rm -v'`. See regression tests
    `test_bash_wrapper_no_tmpfile_when_yaml_missing` and
    `test_bash_wrapper_ignores_rm_alias`.
@@ -71,11 +83,12 @@ tests/test_*.py                pytest, one per module + test_integration.py
 3. **Wrapper cleanup must use `command rm`**, not bare `rm`. Users often
    alias or function-shadow `rm`; `command` bypasses both.
 
-4. **Commands always execute under `/bin/bash`**, regardless of the
-   user's interactive shell. The `--shell=` flag only changes which
-   writeback syntax Python emits (bash/zsh/fish `export` / `set -gx`).
-   Don't "simplify" this to use the parent shell for execution — it
-   would force users to write fish-syntax commands in YAML.
+4. **Commands execute under the parent shell (`--shell=bash|zsh|fish`)**,
+   not always bash. In source mode the parent shell literally `source`s
+   the emitted script. In subprocess mode the runner launches
+   `$shell -c`. The `--shell=` flag decides both the executor and the
+   syntax of the emitted scripts. YAML commands must be written in the
+   user's shell dialect.
 
 5. **`resolver.py` and `emit.py` are pure functions** — no filesystem,
    no subprocess. This is intentional so their tests use in-memory
@@ -85,41 +98,59 @@ tests/test_*.py                pytest, one per module + test_integration.py
    YAML loading. User-defined `commands.shellinit` is shadowed. Adding
    more reserved names? Document them in README §"Reserved names".
 
-7. **Env keys never written back to parent shell**: `PWD`, `OLDPWD`,
-   `SHLVL`, `_`, `PPID`, anything starting with `_CTX_`. Defined in
-   `FILTERED_KEYS` in `emit.py`. Adding to this list is usually safe;
-   removing is not.
+7. **Env keys never written back to parent shell (subprocess mode only)**:
+   `PWD`, `OLDPWD`, `SHLVL`, `_`, `PPID`, anything starting with
+   `_CTX_`, plus `PS1..PS4` and `BASH_*`. Defined in `FILTERED_KEYS`
+   in `emit.py`. Source mode doesn't diff, so this list does not apply
+   to it — the sourced script simply `export`s what it `export`s.
+
+8. **Source mode leaks on failure**. A mid-run failure in source mode
+   leaves any earlier mutations in the parent shell. This is the
+   explicit tradeoff for getting functions/aliases/conda working.
+   Subprocess mode is still the right default when all-or-nothing
+   matters; pick `mode: subprocess` explicitly.
+
+9. **Source mode restores `cwd` after the run**. The emitted script
+   saves `$PWD`, `cd`s into the leaf's `cwd:`, runs, then `cd`s back —
+   matching the prior subprocess-mode contract that `cwd:` is not a
+   persistent shell side effect. Do not remove this: the user expects
+   `ctx build prod` not to dump them in `./app/`.
 
 ## YAML schema quirks
 
 - Top-level is **directly** the command mapping — no wrapper key.
   (`init: {run: [...]}`, not `commands: {init: {...}}`.)
-- `env` values: scalars (str/int/bool) are coerced to strings via
-  `str()` before use; lists/dicts are rejected at load time.
-- Leaf/group disambiguation: presence of `run` key → leaf. A node
-  with `run` plus any non-reserved sibling (anything outside
-  `{run, desc, cwd, env, export, source_rc}`) is rejected.
-- **`env` vs `export`**: both are `mapping<str, str>` layered onto
-  the subprocess env. Difference is in the diff baseline inside
-  runner.py: `env` goes into `baseline_env` (and so doesn't appear
-  in writeback unless mutated), `export` does NOT (and so always
-  does). The same key in both is a validation error.
+- Leaf keys: `{run, desc, cwd, export, mode}`. A leaf with `run` plus
+  any key outside that set is rejected.
+- `export` values: scalars (str/int/bool) are coerced via `str()` at
+  load time; lists/dicts rejected. In source mode the runner emits
+  `export KEY=<shlex.quote(val)>` before running. In subprocess mode
+  they go into the subprocess env but NOT the baseline — so they
+  always appear in the writeback.
+- `mode`: one of `"source"` (default) | `"subprocess"`. Validated in
+  `config.py:_validate_leaf`; consumed in `runner.run_leaf` to
+  dispatch.
+- `run` accepts both a string and a list. A bare string is coerced to
+  a one-element list at load time in `_validate_leaf` so every
+  downstream consumer can assume `list[str]`.
 - **`{args}` placeholder**: a leaf with `{args}` or `{args|default}`
   anywhere in its `run:` list opts into accepting extra CLI tokens.
   resolver detects via `_ARGS_RE`; runner substitutes via
-  `_substitute_args` (shlex.join for safety). Without the
-  placeholder, extra tokens still error as before.
-- **Per-shell executor + `source_rc`**: commands run under the parent
-  shell (`--shell=bash|zsh|fish`), not always bash. runner.py's
-  `_build_script` dispatches to `_build_bashlike_script` (bash and zsh
-  share one script — POSIX-compatible for what we emit) or
-  `_build_fish_script`. fish uses `or exit $status` after each command
-  instead of `set -e`, and `_fish_single_quote` instead of
-  `shlex.quote`. `source_rc: true` inserts a pre-step sourcing
-  `_rc_path_for(shell)` (respects `$ZDOTDIR` for zsh, `$XDG_CONFIG_HOME`
-  for fish) with stdout/stderr redirected to `/dev/null` so a chatty
-  rc doesn't pollute ctx output. `source_rc` is validated as a bool in
-  `config.py:_validate_leaf`.
+  `_substitute_args` (shlex.join for safety). Without the placeholder,
+  extra tokens still error as before. Substitution applies before the
+  script is emitted/executed, same code path for both modes.
+- **Source-mode script shape**: `_build_bashlike_source_script` and
+  `_build_fish_source_script` emit a script that saves `$PWD`, `cd`s
+  into leaf cwd, applies `export`s, runs each command (with a dim
+  `$ cmd` echo), and on failure `return`s out of the sourced script
+  with the non-zero status (after restoring PWD). fish uses
+  `set -l _ctx_rc $status; if test $_ctx_rc -ne 0; ...; return
+  $_ctx_rc; end` because there is no single-line equivalent of
+  `|| return`.
+- **Subprocess-mode script shape**: `_build_subprocess_bashlike` uses
+  `set -e`; `_build_subprocess_fish` uses `or exit $status` after each
+  command. The subprocess dumps its final env via `env -0` to a tmp
+  path, which runner.py parses and diffs vs the starting env.
 - **Group listing**: `GroupListing.children` is a **fully flattened**
   list of `GroupChild(name, desc)` — every reachable leaf, not just
   the immediate children. `name` is the space-joined relative path

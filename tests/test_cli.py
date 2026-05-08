@@ -115,14 +115,35 @@ deploy:
     assert len(entries) == 4  # no group-only lines
 
 
-def test_shell_flag_propagated_to_runner(tmp_path, monkeypatch):
-    """With --shell=fish and CTX_ENV_DUMP set, the file should hold fish syntax."""
+def test_shell_flag_propagated_to_runner_source_mode(tmp_path, monkeypatch):
+    """With --shell=fish (default source mode), the emitted script
+    should use fish syntax."""
     _write_yaml(tmp_path, """
 x:
   run:
+    - set -gx FISH_TEST 1
+""")
+    script = tmp_path / "s.fish"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CTX_SOURCE_SCRIPT", str(script))
+    rc = main(["--shell=fish", "x"])
+    assert rc == 0
+    text = script.read_text()
+    # fish single-quoted path and set -l _ctx_prev_pwd (fish builder hallmark)
+    assert "_ctx_prev_pwd" in text
+    assert "set -gx FISH_TEST 1" in text
+
+
+def test_subprocess_mode_env_dump_uses_shell_flag(tmp_path, monkeypatch):
+    """With mode: subprocess and --shell=fish, the env-dump file uses
+    fish syntax — confirms the flag threads through both modes."""
+    _write_yaml(tmp_path, """
+x:
+  mode: subprocess
+  run:
     - export FISH_TEST=1
 """)
-    dump = tmp_path / "dump.fish"  # wrapper used mktemp -u: path does not exist
+    dump = tmp_path / "dump.fish"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CTX_ENV_DUMP", str(dump))
     rc = main(["--shell=fish", "x"])

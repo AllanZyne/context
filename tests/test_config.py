@@ -27,7 +27,7 @@ def test_find_yaml_stops_at_first_match(tmp_path: Path):
     outer = _touch(tmp_path / "context.yaml")
     inner = _touch(tmp_path / "proj" / "context.yaml")
     assert find_yaml(tmp_path / "proj" / "src") == inner
-    assert outer.exists()  # sanity: both exist
+    assert outer.exists()
 
 
 def test_find_yaml_missing_raises(tmp_path: Path):
@@ -68,7 +68,7 @@ def test_load_nested(tmp_path: Path):
 build:
   prod:
     cwd: ./app
-    env:
+    export:
       NODE_ENV: production
     run:
       - docker build .
@@ -76,7 +76,7 @@ build:
     data = load_and_validate(tmp_path / "context.yaml")
     leaf = data["build"]["prod"]
     assert leaf["cwd"] == "./app"
-    assert leaf["env"] == {"NODE_ENV": "production"}
+    assert leaf["export"] == {"NODE_ENV": "production"}
     assert leaf["run"] == ["docker build ."]
 
 
@@ -117,9 +117,15 @@ build:
 build:
   run:
     - make
-  env:
+  export:
     FOO: [1, 2]
 """, "scalar"),
+    ("""
+build:
+  run:
+    - make
+  mode: weird
+""", "must be one of"),
 ])
 def test_validation_errors(tmp_path: Path, body: str, needle: str):
     _write(tmp_path, body)
@@ -128,46 +134,18 @@ def test_validation_errors(tmp_path: Path, body: str, needle: str):
     assert needle in str(exc.value)
 
 
-def test_env_values_coerced_to_strings(tmp_path: Path):
-    _write(tmp_path, """
-x:
-  env:
-    N: 1
-    B: true
-  run:
-    - echo
-""")
-    data = load_and_validate(tmp_path / "context.yaml")
-    assert data["x"]["env"] == {"N": "1", "B": "True"}
-
-
 def test_export_values_coerced_to_strings(tmp_path: Path):
     _write(tmp_path, """
 x:
   export:
     MYVAR: hello
     N: 42
+    B: true
   run:
     - echo
 """)
     data = load_and_validate(tmp_path / "context.yaml")
-    assert data["x"]["export"] == {"MYVAR": "hello", "N": "42"}
-
-
-def test_env_and_export_conflict_rejected(tmp_path: Path):
-    _write(tmp_path, """
-x:
-  env:
-    FOO: a
-  export:
-    FOO: b
-  run:
-    - echo
-""")
-    with pytest.raises(ConfigError) as exc:
-        load_and_validate(tmp_path / "context.yaml")
-    msg = str(exc.value)
-    assert "'FOO'" in msg and "both" in msg
+    assert data["x"]["export"] == {"MYVAR": "hello", "N": "42", "B": "True"}
 
 
 def test_export_wrong_type_rejected(tmp_path: Path):
@@ -183,29 +161,28 @@ x:
     assert "scalar" in str(exc.value)
 
 
-def test_source_rc_accepts_true_and_false(tmp_path: Path):
+def test_mode_defaults_to_absent(tmp_path: Path):
+    """mode is optional in yaml; resolver applies the default."""
     _write(tmp_path, """
-a:
-  source_rc: true
-  run:
-    - echo
-b:
-  source_rc: false
+x:
   run:
     - echo
 """)
     data = load_and_validate(tmp_path / "context.yaml")
-    assert data["a"]["source_rc"] is True
-    assert data["b"]["source_rc"] is False
+    assert "mode" not in data["x"]
 
 
-def test_source_rc_wrong_type_rejected(tmp_path: Path):
+def test_mode_accepts_source_and_subprocess(tmp_path: Path):
     _write(tmp_path, """
-x:
-  source_rc: "yes"
+a:
+  mode: source
+  run:
+    - echo
+b:
+  mode: subprocess
   run:
     - echo
 """)
-    with pytest.raises(ConfigError) as exc:
-        load_and_validate(tmp_path / "context.yaml")
-    assert "source_rc" in str(exc.value) and "boolean" in str(exc.value)
+    data = load_and_validate(tmp_path / "context.yaml")
+    assert data["a"]["mode"] == "source"
+    assert data["b"]["mode"] == "subprocess"

@@ -18,42 +18,62 @@ def run_leaf(
     project_root: Path,
     shell: str,
     env_dump_path: Path | None,
+    source_script_path: Path | None = None,
 ) -> int:
     """
-    Execute all commands in `leaf.run` under a single subprocess that
-    matches the parent shell (`bash`, `zsh`, or `fish`). The YAML
-    author writes commands in the same shell dialect as their
-    interactive shell.
+    Dispatch on leaf.mode.
 
-    If `leaf.source_rc` is true, the subprocess first sources the
-    user's rc file for that shell (so functions / aliases / PATH from
-    the rc are available to the command).
+    mode="source" (default):
+      Generate a shell script and write it to `source_script_path` for
+      the wrapper to source in the parent shell. Don't execute anything
+      from Python. If `source_script_path` is None (e.g. user invoked
+      ctx-bin directly without the wrapper), fall back to executing in
+      a subprocess so the command isn't silently no-op.
 
-    If `env_dump_path` is given, writes the env writeback source (in
-    `shell` syntax) to it on success. On failure the file is left
-    untouched so shell wrappers skip sourcing.
+    mode="subprocess":
+      Execute the commands under a subprocess of `shell`, diff the env,
+      and write a writeback file to `env_dump_path`. This is the
+      original behavior.
     """
     cwd = _resolve_cwd(project_root, leaf.cwd)
+    commands = _substitute_args(leaf.run, leaf.args)
 
-    # env values are baseline (diff ignores them if the command doesn't
-    # touch them). export values are applied to the subprocess env BUT
-    # kept out of the baseline, so they always show up in the diff and
-    # thus flow back to the parent shell.
+    if leaf.mode == "source":
+        if source_script_path is not None:
+            script = _build_source_script(shell, commands, cwd, leaf.export)
+            source_script_path.write_text(script)
+            return 0
+        # Degraded mode: no wrapper present. Still run the commands so
+        # the user sees output, but env changes won't reach their shell.
+        return _run_subprocess(leaf, cwd, shell, commands, env_dump_path=None)
+
+    return _run_subprocess(leaf, cwd, shell, commands, env_dump_path=env_dump_path)
+
+
+# --- Subprocess mode -----------------------------------------------------
+
+
+def _run_subprocess(
+    leaf: LeafNode,
+    cwd: Path,
+    shell: str,
+    commands: list[str],
+    env_dump_path: Path | None,
+) -> int:
+    # export values are applied to the subprocess env BUT kept out of
+    # the baseline, so they always show up in the diff and thus flow
+    # back to the parent shell.
     baseline_env = os.environ.copy()
-    baseline_env.update(leaf.env)
     subprocess_env = baseline_env.copy()
     subprocess_env.update(leaf.export)
 
-    commands = _substitute_args(leaf.run, leaf.args)
-
-    # Tempfile for the subprocess to dump env -0 into.
     with tempfile.NamedTemporaryFile(
         prefix="ctx-raw-env-", delete=False
     ) as tmp:
         raw_env_path = Path(tmp.name)
 
     try:
-        argv, script = _build_script(shell, commands, cwd, raw_env_path, leaf.source_rc)
+        argv, script = _build_subprocess_script(shell, commands, cwd, raw_env_path)
         completed = subprocess.run(
             argv + [script],
             env=subprocess_env,
@@ -64,10 +84,6 @@ def run_leaf(
         if rc == 0 and env_dump_path is not None:
             final_env = _parse_env_nul(raw_env_path.read_bytes())
             added, removed = diff_env(baseline_env, final_env)
-            # Only create env_dump_path when there is something to
-            # write. The wrapper used `mktemp -u` so the path does not
-            # exist yet; an empty diff means the wrapper finds nothing
-            # to source AND nothing to rm.
             if added or removed:
                 source = _format_for_shell(shell, added, removed)
                 env_dump_path.write_text(source)
@@ -88,10 +104,6 @@ def _substitute_args(commands: list[str], args: list[str]) -> list[str]:
     Replace every occurrence of {args} or {args|<default>} in each
     command. {args} → shlex.join(args) (empty string if no args).
     {args|foo bar} → "foo bar" when args is empty, else shlex.join(args).
-
-    The default is inserted verbatim (not re-quoted) so the YAML author
-    can control its shape directly. Inside the default, '{' and '}' are
-    not allowed (the regex uses [^{}] to keep nesting out).
     """
     joined = shlex.join(args) if args else None
 
@@ -112,58 +124,116 @@ def _resolve_cwd(project_root: Path, cwd: str | None) -> Path:
     return target
 
 
-# --- Per-shell script builders -------------------------------------------
+# --- Source-mode script builder ------------------------------------------
 
 
-def _build_script(
+def _build_source_script(
     shell: str,
     commands: list[str],
     cwd: Path,
-    raw_env_path: Path,
-    source_rc: bool,
-) -> tuple[list[str], str]:
-    """
-    Return `(argv, script)` for the chosen shell. argv is the command
-    to launch; script is the string piped in as `-c`.
-    """
-    if shell == "fish":
-        return (["fish", "-c"], _build_fish_script(commands, cwd, raw_env_path, source_rc))
-    if shell == "zsh":
-        return (["zsh", "-c"], _build_bashlike_script("zsh", commands, cwd, raw_env_path, source_rc))
-    # bash is the default for any other value (validation upstream limits
-    # `shell` to bash/zsh/fish anyway).
-    return (["bash", "-c"], _build_bashlike_script("bash", commands, cwd, raw_env_path, source_rc))
-
-
-def _build_bashlike_script(
-    shell: str,
-    commands: list[str],
-    cwd: Path,
-    raw_env_path: Path,
-    source_rc: bool,
+    export: dict[str, str],
 ) -> str:
     """
-    Script for bash or zsh (POSIX-compatible enough for our needs).
-
-    Order matters:
-      1. cd into cwd (fail fast if broken — no `set -e` yet so rc can
-         use idioms like `grep foo || true` without tripping).
-      2. Source rc if requested. We swallow rc errors so a user with
-         a noisy rc doesn't break ctx; a broken rc surfaces via the
-         command's stderr below.
-      3. `set -e` so the user's `run:` commands fail fast.
-      4. Run commands, each preceded by a dim `$ cmd` echo.
-      5. Dump env with `env -0` on success.
+    Build a script the parent shell will source. Behavior:
+      - Save current dir, cd into leaf cwd, run commands, then cd back.
+        (Only env changes persist; cwd changes do not — matches the old
+        subprocess-mode contract.)
+      - Apply `export` entries before running.
+      - Fail-fast: the first failing command returns out of the sourced
+        script with its status, leaving later commands un-run.
+      - Each command is echoed in dim before running, matching
+        subprocess mode.
     """
-    lines = [f"cd {shlex.quote(str(cwd))}"]
-    if source_rc:
-        rc_path = _rc_path_for(shell)
-        # Quiet the rc: suppress its stdout/stderr so noisy prompts or
-        # `fastfetch` calls don't pollute ctx output. Users who want to
-        # see it can set source_rc: false and source explicitly.
-        lines.append(f"[ -r {shlex.quote(str(rc_path))} ] "
-                     f"&& . {shlex.quote(str(rc_path))} >/dev/null 2>&1 || true")
-    lines.append("set -e")
+    if shell == "fish":
+        return _build_fish_source_script(commands, cwd, export)
+    return _build_bashlike_source_script(commands, cwd, export)
+
+
+def _build_bashlike_source_script(
+    commands: list[str],
+    cwd: Path,
+    export: dict[str, str],
+) -> str:
+    lines: list[str] = [
+        "_ctx_prev_pwd=$PWD",
+        f"cd {shlex.quote(str(cwd))} || return $?",
+    ]
+    for k, v in export.items():
+        lines.append(f"export {k}={shlex.quote(v)}")
+    for cmd in commands:
+        lines.append(
+            f"printf '\\033[2m$ %s\\033[0m\\n' {shlex.quote(cmd)}"
+        )
+        # Run the command, capture its status *before* any cleanup
+        # commands (cd) overwrite $?, and return out of the sourced
+        # script on failure. Keep $_ctx_rc set until after `return`
+        # substitutes it.
+        lines.append(cmd)
+        lines.append(
+            "_ctx_rc=$?; "
+            'if [ $_ctx_rc -ne 0 ]; then '
+            'cd "$_ctx_prev_pwd"; '
+            "unset _ctx_prev_pwd; "
+            "return $_ctx_rc; "
+            "fi; "
+            "unset _ctx_rc"
+        )
+    lines.append('cd "$_ctx_prev_pwd"')
+    lines.append("unset _ctx_prev_pwd")
+    return "\n".join(lines) + "\n"
+
+
+def _build_fish_source_script(
+    commands: list[str],
+    cwd: Path,
+    export: dict[str, str],
+) -> str:
+    lines: list[str] = [
+        "set -l _ctx_prev_pwd $PWD",
+        f"cd {_fish_single_quote(str(cwd))}; or return $status",
+    ]
+    for k, v in export.items():
+        lines.append(f"set -gx {k} {_fish_single_quote(v)}")
+    for cmd in commands:
+        lines.append(
+            f"printf '\\033[2m$ %s\\033[0m\\n' {_fish_single_quote(cmd)}"
+        )
+        # fish doesn't have a clean "return from source with status"
+        # one-liner; use a status-preserving pattern.
+        lines.append(cmd)
+        lines.append(
+            "set -l _ctx_rc $status; "
+            "if test $_ctx_rc -ne 0; "
+            "cd $_ctx_prev_pwd; "
+            "return $_ctx_rc; "
+            "end"
+        )
+    lines.append("cd $_ctx_prev_pwd")
+    return "\n".join(lines) + "\n"
+
+
+# --- Subprocess-mode script builders -------------------------------------
+
+
+def _build_subprocess_script(
+    shell: str,
+    commands: list[str],
+    cwd: Path,
+    raw_env_path: Path,
+) -> tuple[list[str], str]:
+    if shell == "fish":
+        return (["fish", "-c"], _build_subprocess_fish(commands, cwd, raw_env_path))
+    if shell == "zsh":
+        return (["zsh", "-c"], _build_subprocess_bashlike(commands, cwd, raw_env_path))
+    return (["bash", "-c"], _build_subprocess_bashlike(commands, cwd, raw_env_path))
+
+
+def _build_subprocess_bashlike(
+    commands: list[str],
+    cwd: Path,
+    raw_env_path: Path,
+) -> str:
+    lines = [f"cd {shlex.quote(str(cwd))}", "set -e"]
     for cmd in commands:
         lines.append(f"printf '\\033[2m$ %s\\033[0m\\n' {shlex.quote(cmd)}")
         lines.append(cmd)
@@ -171,33 +241,13 @@ def _build_bashlike_script(
     return "\n".join(lines) + "\n"
 
 
-def _build_fish_script(
+def _build_subprocess_fish(
     commands: list[str],
     cwd: Path,
     raw_env_path: Path,
-    source_rc: bool,
 ) -> str:
-    """
-    Script for fish. fish differs from bash/zsh:
-      - No `set -e`; we propagate failures manually with `or exit $status`.
-      - Its equivalent of `source ~/.bashrc` is simply `source
-        ~/.config/fish/config.fish`. fish reads config.fish automatically
-        on startup of an interactive shell BUT `fish -c "..."` is
-        non-interactive and skips it, so source_rc=true still has work.
-      - fish doesn't have `printf` built-in the same way; we use the
-        standalone /usr/bin/printf (or whatever's on PATH), which is
-        portable.
-    """
     lines = [f"cd {_fish_single_quote(str(cwd))}"]
-    if source_rc:
-        rc_path = _rc_path_for("fish")
-        lines.append(
-            f"test -r {_fish_single_quote(str(rc_path))}; "
-            f"and source {_fish_single_quote(str(rc_path))} "
-            f">/dev/null 2>&1"
-        )
     for cmd in commands:
-        # Echo the command (dim) then run it, propagating non-zero.
         lines.append(
             f"printf '\\033[2m$ %s\\033[0m\\n' {_fish_single_quote(cmd)}"
         )
@@ -212,21 +262,6 @@ def _fish_single_quote(s: str) -> str:
     escape `\\` and `'`."""
     escaped = s.replace("\\", "\\\\").replace("'", "\\'")
     return f"'{escaped}'"
-
-
-def _rc_path_for(shell: str) -> Path:
-    """Canonical rc file for a given shell, rooted in $HOME."""
-    home = Path(os.path.expanduser("~"))
-    if shell == "zsh":
-        # Respect $ZDOTDIR if set (zsh convention).
-        zdotdir = os.environ.get("ZDOTDIR")
-        return Path(zdotdir) / ".zshrc" if zdotdir else home / ".zshrc"
-    if shell == "fish":
-        xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = Path(xdg) if xdg else home / ".config"
-        return base / "fish" / "config.fish"
-    # bash
-    return home / ".bashrc"
 
 
 # --- env parsing ---------------------------------------------------------
@@ -253,5 +288,4 @@ def _format_for_shell(
 ) -> str:
     if shell == "fish":
         return format_fish(added, removed)
-    # bash and zsh share the same output.
     return format_bash(added, removed)

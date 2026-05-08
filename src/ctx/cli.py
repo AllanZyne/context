@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     assert isinstance(result, LeafNode)
     env_dump = os.environ.get("CTX_ENV_DUMP")
     env_dump_path = Path(env_dump) if env_dump else None
+    source_script = os.environ.get("CTX_SOURCE_SCRIPT")
+    source_script_path = Path(source_script) if source_script else None
 
     try:
         return run_leaf(
@@ -52,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             project_root=yaml_path.parent,
             shell=shell,
             env_dump_path=env_dump_path,
+            source_script_path=source_script_path,
         )
     except RunnerError as e:
         return _die(str(e))

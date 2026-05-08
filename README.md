@@ -43,12 +43,12 @@ test:
     - pytest {args}               # ctx test -k login  →  pytest -k login
 
 build:
-  prod:
-    cwd: ./app
-    env:
-      NODE_ENV: production
-    run:
-      - docker build -t app:prod .
+  mode: subprocess                # isolate long build from your shell
+  cwd: ./app
+  export:
+    NODE_ENV: production
+  run:
+    - docker build -t app:prod .
 
 activate:
   run:
@@ -58,9 +58,9 @@ activate:
 ```
 $ ctx                   # list available commands
 $ ctx init              # run init.run
-$ ctx build prod        # run build.prod.run
+$ ctx build             # run build.run
 $ ctx test -k login     # forward args via {args}
-$ ctx activate          # env changes flow back
+$ ctx activate          # env / conda / aliases flow into your shell
 ```
 
 ## `context.yaml`
@@ -70,14 +70,29 @@ Top-level is a mapping of command names. A **leaf** has a `run` key; a
 
 ### Leaf fields
 
-| Field       | Type     | Description |
-|-------------|----------|-------------|
-| `run`       | str \| list[str] | Commands run in one shell process, in your parent shell's syntax. Fail-fast on first error. A bare string is shorthand for a one-element list. |
-| `desc`      | str      | Shown in `ctx` listing. |
-| `cwd`       | str      | Relative to `context.yaml`'s directory. |
-| `env`       | mapping  | Set for this run only. Changes don't flow back unless the command itself mutates them. |
-| `export`    | mapping  | Like `env`, but values always flow back to your shell. Can't share keys with `env`. |
-| `source_rc` | bool     | Default `false`. If `true`, source your rc (`~/.bashrc` / `~/.zshrc` / `config.fish`) before `run:` — gives access to your functions, aliases, PATH. |
+| Field    | Type             | Description |
+|----------|------------------|-------------|
+| `run`    | str \| list[str] | Commands run in your parent shell's syntax. Fail-fast on first error. A bare string is shorthand for a one-element list. |
+| `desc`   | str              | Shown in `ctx` listing. |
+| `cwd`    | str              | Relative to `context.yaml`'s directory. Restored after the run. |
+| `export` | mapping          | Set as env vars before `run:`. They persist in your shell in source mode; in subprocess mode they always show up in the writeback. |
+| `mode`   | str              | `source` (default) or `subprocess`. See below. |
+
+### `source` vs `subprocess`
+
+`source` (default) runs the `run:` commands **inside your current shell**
+by sourcing a generated script. Shell functions, aliases, `conda
+activate`, `source some.fish` — everything your shell can do works here,
+and every side effect (env, functions, aliases) persists afterward.
+Great for `init` / `activate` style leaves.
+
+`subprocess` runs the commands under a clean `$SHELL -c …` subprocess
+and flows only env-var changes back to your shell via a diff. Slower,
+but gives an **all-or-nothing** guarantee: if any command fails, *none*
+of the env changes leak into your shell. Use this for builds or any
+long compound command where partial state would be confusing.
+
+Both modes honor `cwd:`, `export:`, `{args}`, and fail-fast.
 
 ### `{args}` forwarding
 
@@ -96,11 +111,10 @@ fmt:
 
 ### Behavior
 
-- Commands run under your parent shell — write `run:` in that shell's
-  syntax (fish users use fish syntax).
-- Env writeback is **all-or-nothing**: a failing command drops all changes.
-- Shell-internal vars (`PWD`, `SHLVL`, `PS1`, `LINES`, `BASH_*`, etc.)
-  are never written back.
+- Commands run in your parent shell's syntax (fish users use fish).
+- `cwd:` is applied for the run and restored afterward.
+- Subprocess mode only: shell-internal vars (`PWD`, `SHLVL`, `PS1`,
+  `LINES`, `BASH_*`, etc.) are never written back.
 - `shellinit` is reserved; a top-level `shellinit:` in your yaml is
   shadowed by the builtin.
 

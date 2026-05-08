@@ -15,10 +15,9 @@ class LeafNode:
     path: tuple[str, ...]
     run: list[str]
     cwd: str | None = None
-    env: dict[str, str] = field(default_factory=dict)
     export: dict[str, str] = field(default_factory=dict)
     args: list[str] = field(default_factory=list)
-    source_rc: bool = False
+    mode: str = "source"
 
     @property
     def accepts_args(self) -> bool:
@@ -121,8 +120,7 @@ def _as_leaf(node: dict, path: tuple[str, ...], args: list[str]) -> LeafNode:
         path=path,
         run=list(node["run"]),
         cwd=node.get("cwd"),
-        env=dict(node.get("env", {})),
         export=dict(node.get("export", {})),
         args=list(args),
-        source_rc=bool(node.get("source_rc", False)),
+        mode=node.get("mode", "source"),
     )

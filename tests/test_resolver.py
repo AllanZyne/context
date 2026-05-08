@@ -14,7 +14,7 @@ CONFIG = {
     "build": {
         "prod": {
             "cwd": "./app",
-            "env": {"FOO": "1"},
+            "export": {"FOO": "1"},
             "run": ["docker build ."],
         },
         "dev": {"run": ["docker build -t dev ."]},
@@ -28,7 +28,7 @@ def test_resolve_single_level_leaf():
     assert result.path == ("init",)
     assert result.run == ["echo init"]
     assert result.cwd is None
-    assert result.env == {}
+    assert result.export == {}
 
 
 def test_resolve_multi_level_leaf():
@@ -37,7 +37,7 @@ def test_resolve_multi_level_leaf():
     assert result.path == ("build", "prod")
     assert result.run == ["docker build ."]
     assert result.cwd == "./app"
-    assert result.env == {"FOO": "1"}
+    assert result.export == {"FOO": "1"}
 
 
 def test_resolve_empty_tokens_lists_all_leaves_flattened():
@@ -142,13 +142,13 @@ def test_resolve_extra_tokens_still_error_when_no_placeholder():
     assert "takes no further arguments" in str(exc.value)
 
 
-def test_resolve_source_rc_defaults_to_false():
+def test_resolve_mode_defaults_to_source():
     result = resolve({"x": {"run": ["echo"]}}, ["x"])
     assert isinstance(result, LeafNode)
-    assert result.source_rc is False
+    assert result.mode == "source"
 
 
-def test_resolve_source_rc_propagates_from_yaml():
-    result = resolve({"x": {"source_rc": True, "run": ["echo"]}}, ["x"])
+def test_resolve_mode_subprocess_propagates_from_yaml():
+    result = resolve({"x": {"mode": "subprocess", "run": ["echo"]}}, ["x"])
     assert isinstance(result, LeafNode)
-    assert result.source_rc is True
+    assert result.mode == "subprocess"

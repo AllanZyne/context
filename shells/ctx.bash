@@ -13,13 +13,21 @@
 # shellinit() output.
 
 ctx() {
-  local _ctx_dump
+  local _ctx_dump _ctx_src
   _ctx_dump=$(mktemp -u -t ctx-env.XXXXXX) || return 1
-  CTX_ENV_DUMP="$_ctx_dump" command ctx-bin --shell=bash "$@"
+  _ctx_src=$(mktemp -u -t ctx-src.XXXXXX) || return 1
+  CTX_ENV_DUMP="$_ctx_dump" CTX_SOURCE_SCRIPT="$_ctx_src" \
+    command ctx-bin --shell=bash "$@"
   local _ctx_rc=$?
-  if [ $_ctx_rc -eq 0 ] && [ -s "$_ctx_dump" ]; then
-    . "$_ctx_dump"
+  if [ $_ctx_rc -eq 0 ]; then
+    if [ -s "$_ctx_src" ]; then
+      . "$_ctx_src"
+      _ctx_rc=$?
+    elif [ -s "$_ctx_dump" ]; then
+      . "$_ctx_dump"
+    fi
   fi
   [ -e "$_ctx_dump" ] && command rm -f "$_ctx_dump"
+  [ -e "$_ctx_src" ] && command rm -f "$_ctx_src"
   return $_ctx_rc
 }

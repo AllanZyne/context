@@ -28,7 +28,8 @@ def find_yaml(start: Path) -> Path:
 import yaml
 
 
-_LEAF_KEYS = {"run", "desc", "cwd", "env", "export", "source_rc"}
+_LEAF_KEYS = {"run", "desc", "cwd", "export", "mode"}
+_VALID_MODES = ("source", "subprocess")
 
 
 def load_and_validate(yaml_path: Path) -> dict:
@@ -103,22 +104,14 @@ def _validate_leaf(node: dict, path: tuple[str, ...]) -> None:
     if "cwd" in node and not isinstance(node["cwd"], str):
         raise ConfigError(f"{dotted}.cwd: must be a string")
 
-    if "source_rc" in node and not isinstance(node["source_rc"], bool):
-        raise ConfigError(
-            f"{dotted}.source_rc: must be a boolean (true or false)"
-        )
-
-    for field in ("env", "export"):
-        if field in node:
-            node[field] = _coerce_env_mapping(node[field], dotted, field)
-
-    if "env" in node and "export" in node:
-        overlap = set(node["env"]) & set(node["export"])
-        if overlap:
+    if "mode" in node:
+        if node["mode"] not in _VALID_MODES:
             raise ConfigError(
-                f"{dotted}: key(s) {sorted(overlap)!r} appear in both 'env' and 'export'; "
-                "put each variable in only one of the two"
+                f"{dotted}.mode: must be one of {_VALID_MODES}, got {node['mode']!r}"
             )
+
+    if "export" in node:
+        node["export"] = _coerce_env_mapping(node["export"], dotted, "export")
 
 
 def _coerce_env_mapping(value, dotted: str, field: str) -> dict[str, str]:

@@ -106,9 +106,13 @@ def test_bash_shellinit_eval_applies_env_writeback(tmp_path: Path):
 
 
 @pytest.mark.skipif(not _has("bash"), reason="bash not available")
-def test_bash_wrapper_no_writeback_on_failure(tmp_path: Path):
+def test_bash_subprocess_mode_no_writeback_on_failure(tmp_path: Path):
+    """All-or-nothing writeback is a subprocess-mode guarantee: a
+    failing command drops *every* env change the run made, even those
+    from earlier successful commands."""
     (tmp_path / "context.yaml").write_text(
         "bad:\n"
+        "  mode: subprocess\n"
         "  run:\n"
         "    - export SHOULD_NOT_LEAK=1\n"
         "    - false\n"
@@ -128,6 +132,32 @@ def test_bash_wrapper_no_writeback_on_failure(tmp_path: Path):
     )
     assert result.returncode == 0
     assert "LEAK=unset" in result.stdout
+
+
+@pytest.mark.skipif(not _has("bash"), reason="bash not available")
+def test_bash_subprocess_mode_writeback_on_success(tmp_path: Path):
+    """mode: subprocess success path still flows env changes through."""
+    (tmp_path / "context.yaml").write_text(
+        "good:\n"
+        "  mode: subprocess\n"
+        "  run:\n"
+        "    - export SUBPROC_VAR=yes\n"
+    )
+    script = f"""
+        source {BASH_WRAPPER}
+        cd {tmp_path}
+        ctx good
+        echo "V=$SUBPROC_VAR"
+    """
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env={**os.environ},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "V=yes" in result.stdout
 
 
 # --- zsh integration ---
