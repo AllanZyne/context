@@ -54,6 +54,15 @@ init:
     assert data["init"]["run"] == ["echo hello"]
 
 
+def test_load_scalar_run_coerced_to_list(tmp_path: Path):
+    _write(tmp_path, """
+init:
+  run: echo hello
+""")
+    data = load_and_validate(tmp_path / "context.yaml")
+    assert data["init"]["run"] == ["echo hello"]
+
+
 def test_load_nested(tmp_path: Path):
     _write(tmp_path, """
 build:
@@ -89,12 +98,16 @@ empty:
 """, "empty node"),
     ("""
 build:
-  run: make
-""", "non-empty list"),
+  run: []
+""", "non-empty string or list"),
     ("""
 build:
-  run: []
-""", "non-empty list"),
+  run: ""
+""", "non-empty string"),
+    ("""
+build:
+  run: 42
+""", "non-empty string or list"),
     ("""
 build:
   run:

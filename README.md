@@ -72,7 +72,7 @@ Top-level is a mapping of command names. A **leaf** has a `run` key; a
 
 | Field       | Type     | Description |
 |-------------|----------|-------------|
-| `run`       | list[str]| Commands run in one shell process, in your parent shell's syntax. Fail-fast on first error. |
+| `run`       | str \| list[str] | Commands run in one shell process, in your parent shell's syntax. Fail-fast on first error. A bare string is shorthand for a one-element list. |
 | `desc`      | str      | Shown in `ctx` listing. |
 | `cwd`       | str      | Relative to `context.yaml`'s directory. |
 | `env`       | mapping  | Set for this run only. Changes don't flow back unless the command itself mutates them. |

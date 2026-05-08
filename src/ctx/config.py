@@ -83,11 +83,19 @@ def _validate_node(node, path: tuple[str, ...]) -> None:
 def _validate_leaf(node: dict, path: tuple[str, ...]) -> None:
     dotted = ".".join(path) or "<root>"
     run = node["run"]
-    if not isinstance(run, list) or not run:
-        raise ConfigError(f"{dotted}: 'run' must be a non-empty list of strings")
-    for i, cmd in enumerate(run):
-        if not isinstance(cmd, str) or not cmd.strip():
-            raise ConfigError(f"{dotted}.run[{i}]: expected a non-empty string")
+    if isinstance(run, str):
+        if not run.strip():
+            raise ConfigError(f"{dotted}.run: expected a non-empty string")
+        node["run"] = [run]
+        run = node["run"]
+    elif isinstance(run, list) and run:
+        for i, cmd in enumerate(run):
+            if not isinstance(cmd, str) or not cmd.strip():
+                raise ConfigError(f"{dotted}.run[{i}]: expected a non-empty string")
+    else:
+        raise ConfigError(
+            f"{dotted}: 'run' must be a non-empty string or list of strings"
+        )
 
     if "desc" in node and not isinstance(node["desc"], str):
         raise ConfigError(f"{dotted}.desc: must be a string")
