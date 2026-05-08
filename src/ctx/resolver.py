@@ -23,13 +23,13 @@ class GroupListing:
 
 def resolve(data: dict, tokens: list[str]) -> LeafNode | GroupListing:
     """
-    Walk the `commands` tree using tokens. Returns either a LeafNode for
+    Walk the command tree using tokens. Returns either a LeafNode for
     execution or a GroupListing when the user needs more arguments.
     Raises ResolveError for bad paths.
 
     Assumes `data` has already been validated by config.load_and_validate.
     """
-    node = data["commands"]
+    node = data
     path: tuple[str, ...] = ()
 
     for i, token in enumerate(tokens):
