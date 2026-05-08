@@ -168,3 +168,31 @@ x:
     with pytest.raises(ConfigError) as exc:
         load_and_validate(tmp_path / "context.yaml")
     assert "scalar" in str(exc.value)
+
+
+def test_source_rc_accepts_true_and_false(tmp_path: Path):
+    _write(tmp_path, """
+a:
+  source_rc: true
+  run:
+    - echo
+b:
+  source_rc: false
+  run:
+    - echo
+""")
+    data = load_and_validate(tmp_path / "context.yaml")
+    assert data["a"]["source_rc"] is True
+    assert data["b"]["source_rc"] is False
+
+
+def test_source_rc_wrong_type_rejected(tmp_path: Path):
+    _write(tmp_path, """
+x:
+  source_rc: "yes"
+  run:
+    - echo
+""")
+    with pytest.raises(ConfigError) as exc:
+        load_and_validate(tmp_path / "context.yaml")
+    assert "source_rc" in str(exc.value) and "boolean" in str(exc.value)

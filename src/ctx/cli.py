@@ -84,10 +84,25 @@ def _cmd_shellinit(args: list[str]) -> int:
 
 
 def _print_group(result: GroupListing) -> None:
-    where = ".".join(result.path) if result.path else "<root>"
-    print(f"Available subcommands under {where}:")
-    for name in result.children:
-        print(f"  {name}")
+    if result.path:
+        print(f"Available subcommands under {'.'.join(result.path)}:")
+    else:
+        print("Available subcommands:")
+    if not result.children:
+        return
+
+    # Align descriptions into a second column, but cap the name column
+    # so one oversized name doesn't push every other desc off-screen.
+    _MAX_NAME_COL = 24
+    name_col = min(
+        max(len(c.name) for c in result.children),
+        _MAX_NAME_COL,
+    )
+    for child in result.children:
+        if child.desc:
+            print(f"  {child.name:<{name_col}}  {child.desc}")
+        else:
+            print(f"  {child.name}")
 
 
 def _die(msg: str) -> int:

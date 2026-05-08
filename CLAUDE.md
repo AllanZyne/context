@@ -98,7 +98,7 @@ tests/test_*.py                pytest, one per module + test_integration.py
   `str()` before use; lists/dicts are rejected at load time.
 - Leaf/group disambiguation: presence of `run` key → leaf. A node
   with `run` plus any non-reserved sibling (anything outside
-  `{run, desc, cwd, env, export}`) is rejected.
+  `{run, desc, cwd, env, export, source_rc}`) is rejected.
 - **`env` vs `export`**: both are `mapping<str, str>` layered onto
   the subprocess env. Difference is in the diff baseline inside
   runner.py: `env` goes into `baseline_env` (and so doesn't appear
@@ -109,6 +109,25 @@ tests/test_*.py                pytest, one per module + test_integration.py
   resolver detects via `_ARGS_RE`; runner substitutes via
   `_substitute_args` (shlex.join for safety). Without the
   placeholder, extra tokens still error as before.
+- **Per-shell executor + `source_rc`**: commands run under the parent
+  shell (`--shell=bash|zsh|fish`), not always bash. runner.py's
+  `_build_script` dispatches to `_build_bashlike_script` (bash and zsh
+  share one script — POSIX-compatible for what we emit) or
+  `_build_fish_script`. fish uses `or exit $status` after each command
+  instead of `set -e`, and `_fish_single_quote` instead of
+  `shlex.quote`. `source_rc: true` inserts a pre-step sourcing
+  `_rc_path_for(shell)` (respects `$ZDOTDIR` for zsh, `$XDG_CONFIG_HOME`
+  for fish) with stdout/stderr redirected to `/dev/null` so a chatty
+  rc doesn't pollute ctx output. `source_rc` is validated as a bool in
+  `config.py:_validate_leaf`.
+- **Group listing**: `GroupListing.children` is a **fully flattened**
+  list of `GroupChild(name, desc)` — every reachable leaf, not just
+  the immediate children. `name` is the space-joined relative path
+  from the listed group down to the leaf (e.g. `"init clovis"`),
+  which is exactly what the user would type after `ctx`. Groups
+  themselves never appear as entries. resolver builds this via
+  `_list_children` → `_walk_leaves`; cli.py renders two columns with
+  padded alignment.
 
 ## Git / workflow gotchas
 
@@ -131,6 +150,28 @@ tests/test_*.py                pytest, one per module + test_integration.py
 - **Adding a test that runs a real shell**: follow the
   `_has("bash") / skipif` pattern already in `test_integration.py`.
   Pass `env={**os.environ}` so PATH reaches the subprocess.
+- **After editing anything under `src/ctx/`, before running a
+  user-facing smoke test (NOT `pytest`)**, re-install the binary:
+
+  ```bash
+  uv tool install --reinstall .
+  ```
+
+  **Why:** `~/.local/bin/ctx-bin` is pinned to whatever code was
+  installed last time. pytest imports from the repo directly
+  (`pythonpath = ["src"]` in pyproject.toml) so unit tests always
+  exercise fresh code, but `ctx` — the shell function from
+  `shells/ctx.<shell>` — invokes `command ctx-bin`, which is the
+  installed binary. Smoke tests silently keep testing stale code
+  until you reinstall. Telltale sign: unit tests pass but an
+  end-to-end smoke shows behavior matching old code (e.g. commands
+  running under bash when `--shell=fish` should dispatch to fish).
+- **A `PATH` with the shell binary is required for that shell's
+  tests.** `shutil.which("zsh")` gates the `@pytest.mark.skipif`.
+  If zsh/fish isn't on `PATH`, add it once for the test run —
+  e.g. `PATH="/localdisk2/yzhao/miniforge3/bin:$PATH" uv run pytest`.
+  Tests will silently skip otherwise, giving a false sense of
+  coverage.
 
 ## Writing style
 

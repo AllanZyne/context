@@ -77,6 +77,44 @@ build:
     assert "prod" in out and "dev" in out
 
 
+def test_bare_ctx_lists_all_leaves_flattened(tmp_path, monkeypatch, capsys):
+    _write_yaml(tmp_path, """
+init:
+  desc: Install project dependencies
+  run:
+    - uv sync
+build:
+  run:
+    - make
+deploy:
+  prod:
+    desc: Production deploy
+    run:
+      - kubectl apply -f .
+  staging:
+    run:
+      - kubectl apply -f staging
+""")
+    monkeypatch.chdir(tmp_path)
+    rc = main([])
+    assert rc == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+
+    assert lines[0] == "Available subcommands:"
+
+    entries = [l.strip() for l in lines[1:] if l.strip()]
+    # All leaves listed, nested ones shown with space-joined paths,
+    # sorted alphabetically. Groups (`deploy`) do not appear alone.
+    assert entries[0] == "build"
+    assert entries[1].startswith("deploy prod")
+    assert "Production deploy" in entries[1]
+    assert entries[2] == "deploy staging"
+    assert entries[3].startswith("init")
+    assert "Install project dependencies" in entries[3]
+    assert len(entries) == 4  # no group-only lines
+
+
 def test_shell_flag_propagated_to_runner(tmp_path, monkeypatch):
     """With --shell=fish and CTX_ENV_DUMP set, the file should hold fish syntax."""
     _write_yaml(tmp_path, """

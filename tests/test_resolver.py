@@ -1,6 +1,12 @@
 import pytest
 
-from ctx.resolver import resolve, LeafNode, GroupListing, ResolveError
+from ctx.resolver import (
+    GroupChild,
+    GroupListing,
+    LeafNode,
+    ResolveError,
+    resolve,
+)
 
 
 CONFIG = {
@@ -34,18 +40,56 @@ def test_resolve_multi_level_leaf():
     assert result.env == {"FOO": "1"}
 
 
-def test_resolve_empty_tokens_lists_top_level():
+def test_resolve_empty_tokens_lists_all_leaves_flattened():
     result = resolve(CONFIG, [])
     assert isinstance(result, GroupListing)
     assert result.path == ()
-    assert sorted(result.children) == ["build", "init"]
+    # Flattens: "build" is a group so its leaves appear as
+    # "build dev" and "build prod". `init` is a leaf at the top.
+    assert [c.name for c in result.children] == [
+        "build dev",
+        "build prod",
+        "init",
+    ]
+    assert all(c.desc is None for c in result.children)
 
 
 def test_resolve_group_without_enough_tokens_lists_children():
     result = resolve(CONFIG, ["build"])
     assert isinstance(result, GroupListing)
     assert result.path == ("build",)
-    assert sorted(result.children) == ["dev", "prod"]
+    # Relative to `build`, so no "build " prefix on the names.
+    assert [c.name for c in result.children] == ["dev", "prod"]
+
+
+def test_resolve_listing_flattens_deeper_groups_and_carries_desc():
+    config = {
+        "init": {"desc": "Install deps", "run": ["uv sync"]},
+        "build": {"run": ["make"]},
+        "deploy": {
+            "prod": {
+                "desc": "Prod deploy",
+                "run": ["kubectl apply -f ."],
+            },
+            "staging": {"run": ["kubectl apply -f staging"]},
+        },
+    }
+    result = resolve(config, [])
+    assert isinstance(result, GroupListing)
+    by_name = {c.name: c for c in result.children}
+    # All leaves flattened, group names absent.
+    assert set(by_name) == {"build", "deploy prod", "deploy staging", "init"}
+    assert by_name["init"].desc == "Install deps"
+    assert by_name["deploy prod"].desc == "Prod deploy"
+    assert by_name["build"].desc is None
+    assert by_name["deploy staging"].desc is None
+    # Deterministic (sorted) order.
+    assert [c.name for c in result.children] == [
+        "build",
+        "deploy prod",
+        "deploy staging",
+        "init",
+    ]
 
 
 def test_resolve_unknown_subcommand():
@@ -96,3 +140,15 @@ def test_resolve_extra_tokens_still_error_when_no_placeholder():
     with pytest.raises(ResolveError) as exc:
         resolve(CONFIG_WITH_ARGS, ["plain", "extra"])
     assert "takes no further arguments" in str(exc.value)
+
+
+def test_resolve_source_rc_defaults_to_false():
+    result = resolve({"x": {"run": ["echo"]}}, ["x"])
+    assert isinstance(result, LeafNode)
+    assert result.source_rc is False
+
+
+def test_resolve_source_rc_propagates_from_yaml():
+    result = resolve({"x": {"source_rc": True, "run": ["echo"]}}, ["x"])
+    assert isinstance(result, LeafNode)
+    assert result.source_rc is True
