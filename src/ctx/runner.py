@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from ctx.emit import diff_env, format_bash, format_fish
-from ctx.resolver import ARGS_PLACEHOLDER, LeafNode
+from ctx.resolver import LeafNode
 
 
 class RunnerError(Exception):
@@ -20,12 +20,18 @@ def run_leaf(
     env_dump_path: Path | None,
 ) -> int:
     """
-    Execute all commands in `leaf.run` under a single bash subprocess.
+    Execute all commands in `leaf.run` under a single subprocess that
+    matches the parent shell (`bash`, `zsh`, or `fish`). The YAML
+    author writes commands in the same shell dialect as their
+    interactive shell.
+
+    If `leaf.source_rc` is true, the subprocess first sources the
+    user's rc file for that shell (so functions / aliases / PATH from
+    the rc are available to the command).
 
     If `env_dump_path` is given, writes the env writeback source (in
     `shell` syntax) to it on success. On failure the file is left
-    untouched (caller is expected to have it empty or non-existent so
-    that shell wrappers skip sourcing).
+    untouched so shell wrappers skip sourcing.
     """
     cwd = _resolve_cwd(project_root, leaf.cwd)
 
@@ -40,16 +46,16 @@ def run_leaf(
 
     commands = _substitute_args(leaf.run, leaf.args)
 
-    # Tempfile for bash to dump env -0 into.
+    # Tempfile for the subprocess to dump env -0 into.
     with tempfile.NamedTemporaryFile(
         prefix="ctx-raw-env-", delete=False
     ) as tmp:
         raw_env_path = Path(tmp.name)
 
     try:
-        script = _build_bash_script(commands, cwd, raw_env_path)
+        argv, script = _build_script(shell, commands, cwd, raw_env_path, leaf.source_rc)
         completed = subprocess.run(
-            ["bash", "-c", script],
+            argv + [script],
             env=subprocess_env,
             cwd=cwd,
         )
@@ -106,20 +112,124 @@ def _resolve_cwd(project_root: Path, cwd: str | None) -> Path:
     return target
 
 
-def _build_bash_script(
+# --- Per-shell script builders -------------------------------------------
+
+
+def _build_script(
+    shell: str,
     commands: list[str],
     cwd: Path,
     raw_env_path: Path,
+    source_rc: bool,
+) -> tuple[list[str], str]:
+    """
+    Return `(argv, script)` for the chosen shell. argv is the command
+    to launch; script is the string piped in as `-c`.
+    """
+    if shell == "fish":
+        return (["fish", "-c"], _build_fish_script(commands, cwd, raw_env_path, source_rc))
+    if shell == "zsh":
+        return (["zsh", "-c"], _build_bashlike_script("zsh", commands, cwd, raw_env_path, source_rc))
+    # bash is the default for any other value (validation upstream limits
+    # `shell` to bash/zsh/fish anyway).
+    return (["bash", "-c"], _build_bashlike_script("bash", commands, cwd, raw_env_path, source_rc))
+
+
+def _build_bashlike_script(
+    shell: str,
+    commands: list[str],
+    cwd: Path,
+    raw_env_path: Path,
+    source_rc: bool,
 ) -> str:
-    lines = [
-        "set -e",
-        f"cd {shlex.quote(str(cwd))}",
-    ]
+    """
+    Script for bash or zsh (POSIX-compatible enough for our needs).
+
+    Order matters:
+      1. cd into cwd (fail fast if broken — no `set -e` yet so rc can
+         use idioms like `grep foo || true` without tripping).
+      2. Source rc if requested. We swallow rc errors so a user with
+         a noisy rc doesn't break ctx; a broken rc surfaces via the
+         command's stderr below.
+      3. `set -e` so the user's `run:` commands fail fast.
+      4. Run commands, each preceded by a dim `$ cmd` echo.
+      5. Dump env with `env -0` on success.
+    """
+    lines = [f"cd {shlex.quote(str(cwd))}"]
+    if source_rc:
+        rc_path = _rc_path_for(shell)
+        # Quiet the rc: suppress its stdout/stderr so noisy prompts or
+        # `fastfetch` calls don't pollute ctx output. Users who want to
+        # see it can set source_rc: false and source explicitly.
+        lines.append(f"[ -r {shlex.quote(str(rc_path))} ] "
+                     f"&& . {shlex.quote(str(rc_path))} >/dev/null 2>&1 || true")
+    lines.append("set -e")
     for cmd in commands:
         lines.append(f"printf '\\033[2m$ %s\\033[0m\\n' {shlex.quote(cmd)}")
         lines.append(cmd)
     lines.append(f"env -0 > {shlex.quote(str(raw_env_path))}")
     return "\n".join(lines) + "\n"
+
+
+def _build_fish_script(
+    commands: list[str],
+    cwd: Path,
+    raw_env_path: Path,
+    source_rc: bool,
+) -> str:
+    """
+    Script for fish. fish differs from bash/zsh:
+      - No `set -e`; we propagate failures manually with `or exit $status`.
+      - Its equivalent of `source ~/.bashrc` is simply `source
+        ~/.config/fish/config.fish`. fish reads config.fish automatically
+        on startup of an interactive shell BUT `fish -c "..."` is
+        non-interactive and skips it, so source_rc=true still has work.
+      - fish doesn't have `printf` built-in the same way; we use the
+        standalone /usr/bin/printf (or whatever's on PATH), which is
+        portable.
+    """
+    lines = [f"cd {_fish_single_quote(str(cwd))}"]
+    if source_rc:
+        rc_path = _rc_path_for("fish")
+        lines.append(
+            f"test -r {_fish_single_quote(str(rc_path))}; "
+            f"and source {_fish_single_quote(str(rc_path))} "
+            f">/dev/null 2>&1"
+        )
+    for cmd in commands:
+        # Echo the command (dim) then run it, propagating non-zero.
+        lines.append(
+            f"printf '\\033[2m$ %s\\033[0m\\n' {_fish_single_quote(cmd)}"
+        )
+        lines.append(f"{cmd}")
+        lines.append("or exit $status")
+    lines.append(f"env -0 > {_fish_single_quote(str(raw_env_path))}")
+    return "\n".join(lines) + "\n"
+
+
+def _fish_single_quote(s: str) -> str:
+    """fish single-quote a string. Inside '...' fish only needs to
+    escape `\\` and `'`."""
+    escaped = s.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+def _rc_path_for(shell: str) -> Path:
+    """Canonical rc file for a given shell, rooted in $HOME."""
+    home = Path(os.path.expanduser("~"))
+    if shell == "zsh":
+        # Respect $ZDOTDIR if set (zsh convention).
+        zdotdir = os.environ.get("ZDOTDIR")
+        return Path(zdotdir) / ".zshrc" if zdotdir else home / ".zshrc"
+    if shell == "fish":
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) if xdg else home / ".config"
+        return base / "fish" / "config.fish"
+    # bash
+    return home / ".bashrc"
+
+
+# --- env parsing ---------------------------------------------------------
 
 
 def _parse_env_nul(data: bytes) -> dict[str, str]:

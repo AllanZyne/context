@@ -28,7 +28,7 @@ def find_yaml(start: Path) -> Path:
 import yaml
 
 
-_LEAF_KEYS = {"run", "desc", "cwd", "env", "export"}
+_LEAF_KEYS = {"run", "desc", "cwd", "env", "export", "source_rc"}
 
 
 def load_and_validate(yaml_path: Path) -> dict:
@@ -94,6 +94,11 @@ def _validate_leaf(node: dict, path: tuple[str, ...]) -> None:
 
     if "cwd" in node and not isinstance(node["cwd"], str):
         raise ConfigError(f"{dotted}.cwd: must be a string")
+
+    if "source_rc" in node and not isinstance(node["source_rc"], bool):
+        raise ConfigError(
+            f"{dotted}.source_rc: must be a boolean (true or false)"
+        )
 
     for field in ("env", "export"):
         if field in node:

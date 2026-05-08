@@ -1,205 +1,117 @@
 # ctx
 
-Run hierarchical commands defined in a project's `context.yaml`, with
-environment-variable changes automatically propagated back to your
-shell (bash/zsh/fish).
+Per-project command runner driven by `context.yaml`. Works in bash,
+zsh, and fish; env changes made by commands flow back to your shell.
 
 ## Install
-
-### Option 1 — from GitHub
 
 ```bash
 uv tool install git+https://github.com/AllanZyne/context
 ```
 
-### Option 2 — from a local checkout
+Or from a local clone:
 
 ```bash
-# 1. Clone the repo wherever you keep source code.
-git clone https://github.com/AllanZyne/context.git
-cd context
-
-# 2. Install the ctx-bin executable into uv's tool environment.
-#    --reinstall is safe to re-run on every `git pull`.
+git clone https://github.com/AllanZyne/context.git && cd context
 uv tool install --reinstall .
-
-# 3. Verify the binary is on your PATH.
-which ctx-bin            # should print something under ~/.local/share/uv/tools
-ctx-bin shellinit bash   # should print a bash `ctx() { ... }` function
 ```
 
-### Shell integration
-
-After the install step above, add **one** line to your shell rc:
+Then add one line to your shell rc:
 
 ```bash
-# ~/.bashrc
-eval "$(ctx-bin shellinit bash)"
-
-# ~/.zshrc
-eval "$(ctx-bin shellinit zsh)"
-
-# ~/.config/fish/config.fish
-ctx-bin shellinit fish | source
+# ~/.bashrc                        eval "$(ctx-bin shellinit bash)"
+# ~/.zshrc                         eval "$(ctx-bin shellinit zsh)"
+# ~/.config/fish/config.fish       ctx-bin shellinit fish | source
 ```
 
-Open a new shell (or re-source your rc) and `ctx` will be available as
-a shell function that forwards to `ctx-bin` and applies any env
-changes back to your shell.
+Open a new shell. `ctx` is now available.
 
-## Upgrade
+**Upgrade:** `uv tool upgrade ctx` (or `git pull && uv tool install --reinstall .`).
 
-```bash
-uv tool upgrade ctx
-# or, for a local checkout:
-cd /path/to/ctx && git pull && uv tool install --reinstall .
-```
+## Quick start
 
-The wrapper is regenerated on every shell startup, so a new shell
-picks up any changes automatically. No need to re-edit your rc.
-
-## Usage
-
-Create a `context.yaml` at your project root:
+Drop a `context.yaml` at your project root:
 
 ```yaml
 init:
   desc: Install deps
   run:
     - uv sync
+
+test:
+  run:
+    - pytest {args}               # ctx test -k login  →  pytest -k login
+
 build:
   prod:
     cwd: ./app
     env:
-      NODE_ENV: production          # visible during the build only
+      NODE_ENV: production
     run:
       - docker build -t app:prod .
-  dev:
-    run:
-      - docker build -t app:dev .
-test:
-  run:
-    - pytest {args}                 # `ctx test -k login` → pytest -k login
-use-python-3.12:
-  export:
-    PYTHON_VERSION: "3.12"          # lives on in your shell after the command
-  run:
-    - pyenv local 3.12.0
+
 activate:
   run:
-    - source .venv/bin/activate     # VIRTUAL_ENV propagates back
+    - source .venv/bin/activate   # VIRTUAL_ENV persists in your shell
 ```
 
-Then, from any directory under the project:
-
 ```
-$ ctx init                # runs init.run
-$ ctx build prod          # runs build.prod.run
-$ ctx test -k login       # runs pytest -k login (via {args})
-$ ctx use-python-3.12     # sets PYTHON_VERSION in your shell (via export:)
-$ ctx activate            # env changes from `source` flow back
-$ echo $VIRTUAL_ENV       # now set
+$ ctx                   # list available commands
+$ ctx init              # run init.run
+$ ctx build prod        # run build.prod.run
+$ ctx test -k login     # forward args via {args}
+$ ctx activate          # env changes flow back
 ```
 
-## `context.yaml` reference
+## `context.yaml`
 
-The top-level is a mapping of subcommand names. Each entry is either a
-**group** (whose values are more entries, forming a subcommand tree)
-or a **leaf** (a concrete command, identified by the presence of a
-`run` key).
+Top-level is a mapping of command names. A **leaf** has a `run` key; a
+**group** doesn't. Nest groups freely: `ctx deploy staging k8s`.
 
 ### Leaf fields
 
-| Field    | Type             | Required | Description                                                                                                                                   |
-|----------|------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| `run`    | list of strings  | yes      | Shell commands executed in order under a single `bash -c` invocation with `set -e`. Pipes, redirections, `source`, and `cd` all work as you'd expect; state (cwd, vars) carries between entries. Empty strings are rejected. |
-| `desc`   | string           | no       | Human description, reserved for future `--help`-style listing. Accepted but currently unused at runtime.                                      |
-| `cwd`    | string           | no       | Working directory for the command, **relative to the directory containing `context.yaml`**. Must exist at execution time. Defaults to the yaml's own directory. |
-| `env`    | mapping          | no       | Extra environment variables for the command. **Local to this run** — values are visible to the command but **do not** propagate back to the parent shell unless the command itself mutates them. Scalars (`string`/`int`/`bool`) are coerced to strings; lists/dicts are rejected. |
-| `export` | mapping          | no       | Same shape as `env`, but values **always** flow back to the parent shell after a successful run. Use this when you want the command's purpose to be "set some variables." A key may appear in `env` **or** `export`, not both. |
+| Field       | Type     | Description |
+|-------------|----------|-------------|
+| `run`       | list[str]| Commands run in one shell process, in your parent shell's syntax. Fail-fast on first error. |
+| `desc`      | str      | Shown in `ctx` listing. |
+| `cwd`       | str      | Relative to `context.yaml`'s directory. |
+| `env`       | mapping  | Set for this run only. Changes don't flow back unless the command itself mutates them. |
+| `export`    | mapping  | Like `env`, but values always flow back to your shell. Can't share keys with `env`. |
+| `source_rc` | bool     | Default `false`. If `true`, source your rc (`~/.bashrc` / `~/.zshrc` / `config.fish`) before `run:` — gives access to your functions, aliases, PATH. |
 
-### Argument forwarding via `{args}`
-
-Any `{args}` placeholder in a `run:` string is replaced at execution
-time with whatever tokens the user passed after the subcommand path,
-shell-quoted for safety:
+### `{args}` forwarding
 
 ```yaml
 test:
   run:
-    - pytest {args}
-
+    - pytest {args}          # ctx test -x -k login  →  pytest -x -k login
 fmt:
   run:
-    - ruff format {args|.}   # default: format the current dir
+    - ruff format {args|.}   # ctx fmt  →  ruff format .   (default)
 ```
 
-```
-$ ctx test                    # → pytest
-$ ctx test -k login -x        # → pytest -k login -x
-$ ctx test "name with spaces" # → pytest 'name with spaces'
-$ ctx fmt                     # → ruff format .   (default kicks in)
-$ ctx fmt src/foo.py          # → ruff format src/foo.py
-```
+- `{args}` substitutes extra tokens (shell-quoted).
+- `{args|fallback}` inserts the `|` part verbatim when no args given.
+- Without `{args}`, extra tokens still error (no accidental silent drop).
 
-Syntax:
+### Behavior
 
-- `{args}` — substituted with the captured tokens (empty string if none).
-- `{args|anything up to the closing brace}` — if the user passes no
-  extra tokens, the default after `|` is inserted **verbatim** (not
-  re-quoted); the YAML author controls its shape directly.
-
-If no `run:` string contains `{args}` (or `{args|...}`), passing extra
-tokens still errors with *"command X takes no further arguments"* —
-behavior is unchanged for subcommands that don't opt in.
-
-### Group rules
-
-A group node is just any node **without** a `run` key. Each of its keys
-names a subcommand. Nesting is unlimited:
-
-```yaml
-deploy:
-  staging:
-    k8s:
-      run:
-        - kubectl apply -f k8s/staging
-```
-
-invoked as `ctx deploy staging k8s`.
-
-A node **cannot** be both a leaf and a group. If you put `run:` on a
-node that already has non-reserved sibling keys, validation fails at
-load time with the full path of the offending node.
-
-### Reserved names
-
-`shellinit` is reserved as a built-in subcommand (used during shell
-integration). If you define a top-level `shellinit`, it is shadowed —
-the built-in wins. Any other name is fair game.
-
-### Behavior notes
-
-- Commands execute under `/bin/bash` with `set -e` — pipes, `source`,
-  `cd`, and bash variable expansion work regardless of your
-  interactive shell.
-- All commands in a single `run:` share one shell process, so
-  `cd some/dir` in command 1 affects command 2, and env assignments
-  persist across the list.
-- **Env writeback only happens on full success.** A single failed
-  command aborts `set -e` and no env changes are propagated.
-- The following shell-internal variables are **never** written back
-  to the parent shell (they would corrupt it): `PWD`, `OLDPWD`,
-  `SHLVL`, `_`, `PPID`, and anything starting with `_CTX_`.
+- Commands run under your parent shell — write `run:` in that shell's
+  syntax (fish users use fish syntax).
+- Env writeback is **all-or-nothing**: a failing command drops all changes.
+- Shell-internal vars (`PWD`, `SHLVL`, `PS1`, `LINES`, `BASH_*`, etc.)
+  are never written back.
+- `shellinit` is reserved; a top-level `shellinit:` in your yaml is
+  shadowed by the builtin.
 
 ### Exit codes
 
-| Code | Meaning                                                                      |
-|------|------------------------------------------------------------------------------|
-| 0    | Command ran successfully (or tokens resolved to a group listing).            |
-| 1    | Setup error: missing `context.yaml`, schema error, missing `cwd`, or invalid `--shell=`. |
-| 2    | Resolution error: unknown subcommand, or extra tokens after a leaf.          |
-| n    | Any other non-zero value is propagated directly from the failing command.    |
+| Code | Meaning |
+|------|---------|
+| 0    | Command succeeded / listing shown. |
+| 1    | Setup error (missing yaml, schema, bad `cwd`). |
+| 2    | Resolution error (unknown subcommand, extra tokens). |
+| n    | Propagated from the failing command. |
 
 ## Development
 

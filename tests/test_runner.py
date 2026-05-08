@@ -226,3 +226,135 @@ def test_run_leaf_args_substituted_in_multiple_commands(project: Path, capfd):
     out = capfd.readouterr().out
     assert "first X" in out
     assert "second X" in out
+
+
+# --- Per-shell execution ------------------------------------------------
+
+
+import shutil  # noqa: E402
+
+
+def _has(binary: str) -> bool:
+    return shutil.which(binary) is not None
+
+
+@pytest.mark.skipif(not _has("zsh"), reason="zsh not available")
+def test_run_leaf_uses_zsh_when_shell_is_zsh(project: Path, capfd):
+    """With shell=zsh the command runs under zsh, so $ZSH_VERSION is set."""
+    leaf = LeafNode(path=("x",), run=['echo "zsh=${ZSH_VERSION:-absent}"'])
+    rc = run_leaf(leaf, project, shell="zsh", env_dump_path=None)
+    assert rc == 0
+    out = capfd.readouterr().out
+    assert "zsh=" in out
+    assert "zsh=absent" not in out
+
+
+@pytest.mark.skipif(not _has("fish"), reason="fish not available")
+def test_run_leaf_uses_fish_when_shell_is_fish(project: Path, capfd):
+    """fish-only syntax works under shell=fish."""
+    leaf = LeafNode(
+        path=("x",),
+        run=[
+            "set -l greet hi",
+            "echo greeting=$greet",
+        ],
+    )
+    rc = run_leaf(leaf, project, shell="fish", env_dump_path=None)
+    assert rc == 0
+    assert "greeting=hi" in capfd.readouterr().out
+
+
+@pytest.mark.skipif(not _has("fish"), reason="fish not available")
+def test_run_leaf_fish_fails_fast(project: Path, capfd):
+    """fish runner must stop after the first failing command."""
+    leaf = LeafNode(
+        path=("x",),
+        run=[
+            "false",
+            "echo should-not-appear",
+        ],
+    )
+    rc = run_leaf(leaf, project, shell="fish", env_dump_path=None)
+    assert rc != 0
+    assert "should-not-appear" not in capfd.readouterr().out
+
+
+# --- source_rc ----------------------------------------------------------
+
+
+def test_run_leaf_bash_source_rc_loads_function(project, tmp_path, monkeypatch, capfd):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".bashrc").write_text(
+        'greet_from_rc() { echo "greet:$1"; }\n'
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    leaf = LeafNode(
+        path=("x",),
+        run=["greet_from_rc world"],
+        source_rc=True,
+    )
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    assert "greet:world" in capfd.readouterr().out
+
+
+def test_run_leaf_bash_without_source_rc_does_not_see_function(project, tmp_path, monkeypatch):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".bashrc").write_text(
+        'greet_from_rc() { echo "greet:$1"; }\n'
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    leaf = LeafNode(path=("x",), run=["greet_from_rc world"])
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc != 0  # command not found
+
+
+@pytest.mark.skipif(not _has("zsh"), reason="zsh not available")
+def test_run_leaf_zsh_source_rc_loads_function(project, tmp_path, monkeypatch, capfd):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".zshrc").write_text(
+        'greet_from_rc() { echo "greet:$1"; }\n'
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+
+    leaf = LeafNode(path=("x",), run=["greet_from_rc zsh"], source_rc=True)
+    rc = run_leaf(leaf, project, shell="zsh", env_dump_path=None)
+    assert rc == 0
+    assert "greet:zsh" in capfd.readouterr().out
+
+
+@pytest.mark.skipif(not _has("fish"), reason="fish not available")
+def test_run_leaf_fish_source_rc_loads_function(project, tmp_path, monkeypatch, capfd):
+    fake_home = tmp_path / "home"
+    config_dir = fake_home / ".config" / "fish"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.fish").write_text(
+        "function greet_from_rc\n"
+        "    echo greet:$argv[1]\n"
+        "end\n"
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    leaf = LeafNode(path=("x",), run=["greet_from_rc fish"], source_rc=True)
+    rc = run_leaf(leaf, project, shell="fish", env_dump_path=None)
+    assert rc == 0
+    assert "greet:fish" in capfd.readouterr().out
+
+
+def test_run_leaf_source_rc_true_but_rc_missing_does_not_error(project, tmp_path, monkeypatch, capfd):
+    """If source_rc=true but the rc file doesn't exist, skip sourcing silently."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    leaf = LeafNode(path=("x",), run=["echo ok"], source_rc=True)
+    rc = run_leaf(leaf, project, shell="bash", env_dump_path=None)
+    assert rc == 0
+    assert "ok" in capfd.readouterr().out
