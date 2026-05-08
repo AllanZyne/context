@@ -11,12 +11,12 @@
 
 ctx() {
   local _ctx_dump
-  _ctx_dump=$(mktemp -t ctx-env.XXXXXX) || return 1
+  _ctx_dump=$(mktemp -u -t ctx-env.XXXXXX) || return 1
   CTX_ENV_DUMP="$_ctx_dump" command ctx-bin --shell=zsh "$@"
   local _ctx_rc=$?
   if [ $_ctx_rc -eq 0 ] && [ -s "$_ctx_dump" ]; then
     . "$_ctx_dump"
   fi
-  rm -f "$_ctx_dump"
+  [ -e "$_ctx_dump" ] && command rm -f "$_ctx_dump"
   return $_ctx_rc
 }

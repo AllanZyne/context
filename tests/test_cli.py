@@ -84,8 +84,7 @@ x:
   run:
     - export FISH_TEST=1
 """)
-    dump = tmp_path / "dump.fish"
-    dump.write_text("")
+    dump = tmp_path / "dump.fish"  # wrapper used mktemp -u: path does not exist
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CTX_ENV_DUMP", str(dump))
     rc = main(["--shell=fish", "x"])
