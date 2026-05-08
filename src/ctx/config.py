@@ -42,12 +42,10 @@ def load_and_validate(yaml_path: Path) -> dict:
     except yaml.YAMLError as e:
         raise ConfigError(f"failed to parse {yaml_path}: {e}") from e
 
-    if not isinstance(raw, dict) or "commands" not in raw:
-        raise ConfigError("top-level 'commands' key is required")
-    if not isinstance(raw["commands"], dict) or not raw["commands"]:
-        raise ConfigError("'commands' must be a non-empty mapping")
+    if not isinstance(raw, dict) or not raw:
+        raise ConfigError("context.yaml must be a non-empty mapping of commands")
 
-    _validate_group(raw["commands"], path=("commands",))
+    _validate_group(raw, path=())
     return raw
 
 
@@ -57,7 +55,7 @@ def _validate_group(group: dict, path: tuple[str, ...]) -> None:
 
 
 def _validate_node(node, path: tuple[str, ...]) -> None:
-    dotted = ".".join(path)
+    dotted = ".".join(path) or "<root>"
     if not isinstance(node, dict):
         raise ConfigError(f"{dotted}: expected a mapping, got {type(node).__name__}")
     if not node:
@@ -83,7 +81,7 @@ def _validate_node(node, path: tuple[str, ...]) -> None:
 
 
 def _validate_leaf(node: dict, path: tuple[str, ...]) -> None:
-    dotted = ".".join(path)
+    dotted = ".".join(path) or "<root>"
     run = node["run"]
     if not isinstance(run, list) or not run:
         raise ConfigError(f"{dotted}: 'run' must be a non-empty list of strings")

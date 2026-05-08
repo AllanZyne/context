@@ -57,10 +57,9 @@ def test_static_wrapper_matches_shellinit(shell: str, path: Path):
 @pytest.mark.skipif(not _has("bash"), reason="bash not available")
 def test_bash_static_file_applies_env_writeback(tmp_path: Path):
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  set-foo:\n"
-        "    run:\n"
-        "      - export FOO=bar-from-ctx\n"
+        "set-foo:\n"
+        "  run:\n"
+        "    - export FOO=bar-from-ctx\n"
     )
     script = f"""
         set -e
@@ -84,10 +83,9 @@ def test_bash_static_file_applies_env_writeback(tmp_path: Path):
 def test_bash_shellinit_eval_applies_env_writeback(tmp_path: Path):
     """Same outcome as the static-file test but via `ctx-bin shellinit bash`."""
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  set-foo:\n"
-        "    run:\n"
-        "      - export FOO=bar-from-ctx\n"
+        "set-foo:\n"
+        "  run:\n"
+        "    - export FOO=bar-from-ctx\n"
     )
     script = f"""
         set -e
@@ -110,11 +108,10 @@ def test_bash_shellinit_eval_applies_env_writeback(tmp_path: Path):
 @pytest.mark.skipif(not _has("bash"), reason="bash not available")
 def test_bash_wrapper_no_writeback_on_failure(tmp_path: Path):
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  bad:\n"
-        "    run:\n"
-        "      - export SHOULD_NOT_LEAK=1\n"
-        "      - false\n"
+        "bad:\n"
+        "  run:\n"
+        "    - export SHOULD_NOT_LEAK=1\n"
+        "    - false\n"
     )
     script = f"""
         source {BASH_WRAPPER}
@@ -139,10 +136,9 @@ def test_bash_wrapper_no_writeback_on_failure(tmp_path: Path):
 @pytest.mark.skipif(not _has("zsh"), reason="zsh not available")
 def test_zsh_static_file_applies_env_writeback(tmp_path: Path):
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  set-foo:\n"
-        "    run:\n"
-        "      - export FOO=bar-from-ctx\n"
+        "set-foo:\n"
+        "  run:\n"
+        "    - export FOO=bar-from-ctx\n"
     )
     script = f"""
         source {ZSH_WRAPPER}
@@ -167,10 +163,9 @@ def test_zsh_static_file_applies_env_writeback(tmp_path: Path):
 @pytest.mark.skipif(not _has("fish"), reason="fish not available")
 def test_fish_static_file_applies_env_writeback(tmp_path: Path):
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  set-foo:\n"
-        "    run:\n"
-        "      - export FOO=bar-from-ctx\n"
+        "set-foo:\n"
+        "  run:\n"
+        "    - export FOO=bar-from-ctx\n"
     )
     script = f"""
         source {FISH_WRAPPER}
@@ -192,10 +187,9 @@ def test_fish_static_file_applies_env_writeback(tmp_path: Path):
 @pytest.mark.skipif(not _has("fish"), reason="fish not available")
 def test_fish_shellinit_pipe_applies_env_writeback(tmp_path: Path):
     (tmp_path / "context.yaml").write_text(
-        "commands:\n"
-        "  set-foo:\n"
-        "    run:\n"
-        "      - export FOO=bar-from-ctx\n"
+        "set-foo:\n"
+        "  run:\n"
+        "    - export FOO=bar-from-ctx\n"
     )
     script = f"""
         uv --directory {REPO_ROOT} run ctx-bin shellinit fish | source

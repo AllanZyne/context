@@ -4,17 +4,15 @@ from ctx.resolver import resolve, LeafNode, GroupListing, ResolveError
 
 
 CONFIG = {
-    "commands": {
-        "init": {"run": ["echo init"]},
-        "build": {
-            "prod": {
-                "cwd": "./app",
-                "env": {"FOO": "1"},
-                "run": ["docker build ."],
-            },
-            "dev": {"run": ["docker build -t dev ."]},
+    "init": {"run": ["echo init"]},
+    "build": {
+        "prod": {
+            "cwd": "./app",
+            "env": {"FOO": "1"},
+            "run": ["docker build ."],
         },
-    }
+        "dev": {"run": ["docker build -t dev ."]},
+    },
 }
 
 

@@ -32,10 +32,9 @@ def test_shellinit_unknown_shell(tmp_path, capsys, monkeypatch):
 
 def test_runs_leaf_successfully(tmp_path, monkeypatch, capfd):
     _write_yaml(tmp_path, """
-commands:
-  init:
-    run:
-      - echo hi-from-ctx
+init:
+  run:
+    - echo hi-from-ctx
 """)
     monkeypatch.chdir(tmp_path)
     rc = main(["init"])
@@ -52,11 +51,10 @@ def test_missing_yaml_exits_1(tmp_path, monkeypatch, capsys):
 
 def test_unknown_subcommand_exits_2(tmp_path, monkeypatch, capsys):
     _write_yaml(tmp_path, """
-commands:
-  build:
-    prod:
-      run:
-        - echo
+build:
+  prod:
+    run:
+      - echo
 """)
     monkeypatch.chdir(tmp_path)
     rc = main(["build", "staging"])
@@ -68,10 +66,9 @@ def test_group_with_exhausted_tokens_lists_children(
     tmp_path, monkeypatch, capsys
 ):
     _write_yaml(tmp_path, """
-commands:
-  build:
-    prod: {run: [echo p]}
-    dev: {run: [echo d]}
+build:
+  prod: {run: [echo p]}
+  dev: {run: [echo d]}
 """)
     monkeypatch.chdir(tmp_path)
     rc = main(["build"])
@@ -83,10 +80,9 @@ commands:
 def test_shell_flag_propagated_to_runner(tmp_path, monkeypatch):
     """With --shell=fish and CTX_ENV_DUMP set, the file should hold fish syntax."""
     _write_yaml(tmp_path, """
-commands:
-  x:
-    run:
-      - export FISH_TEST=1
+x:
+  run:
+    - export FISH_TEST=1
 """)
     dump = tmp_path / "dump.fish"
     dump.write_text("")
@@ -108,10 +104,9 @@ def test_invalid_shell_flag_rejected(tmp_path, monkeypatch, capsys):
 
 def test_shellinit_reserved_shadows_user_command(tmp_path, monkeypatch, capsys):
     _write_yaml(tmp_path, """
-commands:
-  shellinit:
-    run:
-      - echo user-version
+shellinit:
+  run:
+    - echo user-version
 """)
     monkeypatch.chdir(tmp_path)
     rc = main(["shellinit", "bash"])

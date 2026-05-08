@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from ctx.config import find_yaml, ConfigError
+from ctx.config import find_yaml, ConfigError, load_and_validate
 
 
 def _touch(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("commands: {}\n")
+    path.write_text("init:\n  run:\n    - echo\n")
     return path
 
 
@@ -38,9 +38,6 @@ def test_find_yaml_missing_raises(tmp_path: Path):
     assert "no context.yaml found" in str(exc.value)
 
 
-from ctx.config import load_and_validate
-
-
 def _write(tmp_path: Path, body: str) -> Path:
     p = tmp_path / "context.yaml"
     p.write_text(body)
@@ -49,74 +46,66 @@ def _write(tmp_path: Path, body: str) -> Path:
 
 def test_load_minimal_leaf(tmp_path: Path):
     _write(tmp_path, """
-commands:
-  init:
-    run:
-      - echo hello
+init:
+  run:
+    - echo hello
 """)
     data = load_and_validate(tmp_path / "context.yaml")
-    assert data["commands"]["init"]["run"] == ["echo hello"]
+    assert data["init"]["run"] == ["echo hello"]
 
 
 def test_load_nested(tmp_path: Path):
     _write(tmp_path, """
-commands:
-  build:
-    prod:
-      cwd: ./app
-      env:
-        NODE_ENV: production
-      run:
-        - docker build .
+build:
+  prod:
+    cwd: ./app
+    env:
+      NODE_ENV: production
+    run:
+      - docker build .
 """)
     data = load_and_validate(tmp_path / "context.yaml")
-    leaf = data["commands"]["build"]["prod"]
+    leaf = data["build"]["prod"]
     assert leaf["cwd"] == "./app"
     assert leaf["env"] == {"NODE_ENV": "production"}
     assert leaf["run"] == ["docker build ."]
 
 
 @pytest.mark.parametrize("body,needle", [
-    ("", "top-level 'commands'"),
-    ("commands: []", "non-empty mapping"),
-    ("commands: {}", "non-empty mapping"),
+    ("", "non-empty mapping"),
+    ("[]", "non-empty mapping"),
+    ("{}", "non-empty mapping"),
     ("""
-commands:
-  build:
+build:
+  run:
+    - make
+  prod:
     run:
-      - make
-    prod:
-      run:
-        - make prod
+      - make prod
 """, "unexpected key"),
     ("""
-commands:
-  empty:
-    desc: nothing
+empty:
+  desc: nothing
 """, "empty node"),
     ("""
-commands:
-  build:
-    run: make
+build:
+  run: make
 """, "non-empty list"),
     ("""
-commands:
-  build:
-    run: []
+build:
+  run: []
 """, "non-empty list"),
     ("""
-commands:
-  build:
-    run:
-      - ""
+build:
+  run:
+    - ""
 """, "non-empty string"),
     ("""
-commands:
-  build:
-    run:
-      - make
-    env:
-      FOO: [1, 2]
+build:
+  run:
+    - make
+  env:
+    FOO: [1, 2]
 """, "scalar"),
 ])
 def test_validation_errors(tmp_path: Path, body: str, needle: str):
@@ -128,13 +117,12 @@ def test_validation_errors(tmp_path: Path, body: str, needle: str):
 
 def test_env_values_coerced_to_strings(tmp_path: Path):
     _write(tmp_path, """
-commands:
-  x:
-    env:
-      N: 1
-      B: true
-    run:
-      - echo
+x:
+  env:
+    N: 1
+    B: true
+  run:
+    - echo
 """)
     data = load_and_validate(tmp_path / "context.yaml")
-    assert data["commands"]["x"]["env"] == {"N": "1", "B": "True"}
+    assert data["x"]["env"] == {"N": "1", "B": "True"}
